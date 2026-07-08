@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 
 const app = require('../server');
 const { writeSeedData } = require('../lib/seed');
+const { resolveStorageAdapter } = require('../lib/store');
+const { createSupabaseStore } = require('../lib/supabaseStore');
 const {
   calculatePlannedChargeDate,
   createScheduledOrderFromMilestone,
@@ -202,6 +204,52 @@ test('json storage adapter still works', () => {
   const state = adapter.getState();
   assert.ok(state.orders.length >= 1);
   assert.equal(adapter.listScheduledOrders().length, state.orders.length);
+});
+
+test('storage backend defaults to JSON', () => {
+  const adapter = resolveStorageAdapter({ STORAGE_BACKEND: 'json' });
+  assert.equal(typeof adapter.getState, 'function');
+  assert.equal(typeof adapter.saveState, 'function');
+});
+
+test('invalid storage backend fails clearly', () => {
+  assert.throws(() => resolveStorageAdapter({ STORAGE_BACKEND: 'redis' }), /STORAGE_BACKEND/i);
+});
+
+test('supabase backend requires env vars', () => {
+  assert.throws(() => resolveStorageAdapter({ STORAGE_BACKEND: 'supabase' }), /SUPABASE_URL|SUPABASE_SERVICE_ROLE_KEY/i);
+});
+
+test('supabase adapter exports the expected interface', () => {
+  const adapter = createSupabaseStore({
+    SUPABASE_URL: 'https://example.supabase.co',
+    SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+  });
+  const requiredMethods = [
+    'getState',
+    'saveState',
+    'listCustomers',
+    'getCustomerById',
+    'createRecipient',
+    'updateRecipient',
+    'createMilestone',
+    'updateMilestone',
+    'listScheduledOrders',
+    'getScheduledOrderById',
+    'createScheduledOrder',
+    'updateScheduledOrder',
+    'createOrderEventLog',
+    'listOrderEventLogs',
+    'createPaymentConsent',
+    'revokePaymentConsent',
+    'listFloristPartners',
+    'createFloristPartner',
+    'updateFloristPartner',
+    'listServiceZones',
+  ];
+  requiredMethods.forEach((method) => {
+    assert.equal(typeof adapter[method], 'function');
+  });
 });
 
 test('internal endpoints reject missing secret', async () => {

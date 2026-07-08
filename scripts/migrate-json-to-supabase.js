@@ -1,0 +1,218 @@
+#!/usr/bin/env node
+const fs = require('fs');
+const path = require('path');
+const { createClient } = require('@supabase/supabase-js');
+
+function fail(message) {
+  throw new Error(message);
+}
+
+function readJsonState() {
+  const dataFile = path.join(__dirname, '..', 'data', 'app-data.json');
+  if (!fs.existsSync(dataFile)) {
+    fail(`Missing local data file at ${dataFile}`);
+  }
+  return JSON.parse(fs.readFileSync(dataFile, 'utf8'));
+}
+
+function normalizeId(value) {
+  return value && value !== '' ? value : null;
+}
+
+async function main() {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseUrl || !serviceRoleKey) {
+    fail('Supabase migration requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY');
+  }
+
+  const supabase = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  const state = readJsonState();
+  const summary = { customers: 0, recipients: 0, milestones: 0, scheduledOrders: 0, florists: 0, zones: 0, consents: 0, logs: 0, feedback: 0 };
+
+  const customerRows = (state.users || []).map((customer) => ({
+    id: normalizeId(customer.id),
+    name: customer.name || '',
+    email: customer.email || null,
+    phone: customer.phone || null,
+    marketing_email_consent: Boolean(customer.marketingEmailConsent),
+    marketing_sms_consent: Boolean(customer.marketingSmsConsent),
+    created_at: customer.createdAt || new Date().toISOString(),
+    updated_at: customer.updatedAt || new Date().toISOString(),
+  }));
+
+  const { data: customerData, error: customerError } = await supabase.from('customers').upsert(customerRows, { onConflict: 'id' }).select('id');
+  if (customerError) {
+    throw customerError;
+  }
+  summary.customers = customerData?.length || 0;
+
+  const recipientRows = (state.recipients || []).map((recipient) => ({
+    id: normalizeId(recipient.id),
+    customer_id: normalizeId(recipient.userId),
+    name: recipient.name || '',
+    relationship: recipient.relationship || null,
+    phone: recipient.phone || null,
+    address_line_1: recipient.addressLine1 || null,
+    address_line_2: recipient.addressLine2 || null,
+    city: recipient.city || null,
+    province: recipient.province || null,
+    postal_code: recipient.postalCode || null,
+    delivery_instructions: recipient.deliveryInstructions || null,
+    created_at: recipient.createdAt || new Date().toISOString(),
+    updated_at: recipient.updatedAt || new Date().toISOString(),
+  }));
+  const { data: recipientData, error: recipientError } = await supabase.from('recipients').upsert(recipientRows, { onConflict: 'id' }).select('id');
+  if (recipientError) {
+    throw recipientError;
+  }
+  summary.recipients = recipientData?.length || 0;
+
+  const milestoneRows = (state.milestones || []).map((milestone) => ({
+    id: normalizeId(milestone.id),
+    customer_id: normalizeId(milestone.userId),
+    recipient_id: normalizeId(milestone.recipientId),
+    occasion_type: milestone.occasionType || 'custom',
+    occasion_label: milestone.occasionLabel || null,
+    event_date: milestone.eventDate || null,
+    repeats_annually: Boolean(milestone.repeatsAnnually),
+    budget_tier: milestone.budgetTier || 'classic',
+    status: milestone.status || 'active',
+    card_message_tone: milestone.cardMessageTone || null,
+    style_preferences: milestone.stylePreferences || null,
+    allergies_or_avoid: milestone.allergiesOrAvoid || null,
+    hard_no_preferences: milestone.hardNoPreferences || null,
+    reminder_days_before: milestone.reminderDaysBefore || 7,
+    charge_days_before: milestone.chargeDaysBefore || 5,
+    created_at: milestone.createdAt || new Date().toISOString(),
+    updated_at: milestone.updatedAt || new Date().toISOString(),
+  }));
+  const { data: milestoneData, error: milestoneError } = await supabase.from('milestones').upsert(milestoneRows, { onConflict: 'id' }).select('id');
+  if (milestoneError) {
+    throw milestoneError;
+  }
+  summary.milestones = milestoneData?.length || 0;
+
+  const orderRows = (state.orders || []).map((order) => ({
+    id: normalizeId(order.id),
+    customer_id: normalizeId(order.userId),
+    recipient_id: normalizeId(order.recipientId),
+    milestone_id: normalizeId(order.milestoneId),
+    event_date: order.eventDate || null,
+    planned_charge_date: order.plannedChargeDate || null,
+    budget_tier: order.budgetTier || 'classic',
+    estimated_customer_price_cents: order.estimatedCustomerPriceCents || 0,
+    delivery_fee_cents: order.deliveryFeeCents || 0,
+    status: order.status || 'scheduled',
+    florist_partner_id: normalizeId(order.floristPartnerId),
+    internal_notes: order.internalNotes || null,
+    customer_notes: order.customerNotes || null,
+    generated_card_message: order.generatedCardMessage || null,
+    photo_proof_url: order.photoProofUrl || null,
+    delivered_at: order.deliveredAt || null,
+    support_minutes: order.supportMinutes || 0,
+    refund_amount_cents: order.refundAmountCents || null,
+    created_at: order.createdAt || new Date().toISOString(),
+    updated_at: order.updatedAt || new Date().toISOString(),
+  }));
+  const { data: orderData, error: orderError } = await supabase.from('scheduled_orders').upsert(orderRows, { onConflict: 'id' }).select('id');
+  if (orderError) {
+    throw orderError;
+  }
+  summary.scheduledOrders = orderData?.length || 0;
+
+  const floristRows = (state.floristPartners || []).map((florist) => ({
+    id: normalizeId(florist.id),
+    name: florist.name || '',
+    contact_name: florist.contactName || null,
+    email: florist.email || null,
+    phone: florist.phone || null,
+    address: florist.address || null,
+    city: florist.city || null,
+    postal_code: florist.postalCode || null,
+    active: Boolean(florist.active),
+    weekday_only: Boolean(florist.weekdayOnly),
+    service_zones: florist.serviceZones || [],
+    notes: florist.notes || null,
+    created_at: florist.createdAt || new Date().toISOString(),
+    updated_at: florist.updatedAt || new Date().toISOString(),
+  }));
+  const { data: floristData, error: floristError } = await supabase.from('florist_partners').upsert(floristRows, { onConflict: 'id' }).select('id');
+  if (floristError) {
+    throw floristError;
+  }
+  summary.florists = floristData?.length || 0;
+
+  const zoneRows = (state.serviceZones || []).map((zone) => ({
+    id: normalizeId(zone.id),
+    name: zone.name || '',
+    prefixes: zone.prefixes || [],
+    active: Boolean(zone.active),
+    delivery_fee_cents: zone.deliveryFeeCents || 0,
+    notes: zone.notes || null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }));
+  const { data: zoneData, error: zoneError } = await supabase.from('service_zones').upsert(zoneRows, { onConflict: 'id' }).select('id');
+  if (zoneError) {
+    throw zoneError;
+  }
+  summary.zones = zoneData?.length || 0;
+
+  const consentRows = (state.paymentConsents || []).map((consent) => ({
+    id: normalizeId(consent.id),
+    customer_id: normalizeId(consent.userId),
+    stripe_customer_id: consent.stripeCustomerId || null,
+    stripe_payment_method_id: consent.stripePaymentMethodId || null,
+    consent_text_version: consent.consentTextVersion || null,
+    consent_text_snapshot: consent.consentTextSnapshot || null,
+    consented_at: consent.consentedAt || new Date().toISOString(),
+    ip_address: consent.ipAddress || null,
+    user_agent: consent.userAgent || null,
+    active: Boolean(consent.active),
+    created_at: consent.consentedAt || new Date().toISOString(),
+    updated_at: consent.consentedAt || new Date().toISOString(),
+  }));
+  const { data: consentData, error: consentError } = await supabase.from('payment_consents').upsert(consentRows, { onConflict: 'id' }).select('id');
+  if (consentError) {
+    throw consentError;
+  }
+  summary.consents = consentData?.length || 0;
+
+  const eventRows = (state.orderEvents || []).map((event) => ({
+    id: normalizeId(event.id),
+    order_id: normalizeId(event.orderId),
+    type: event.type || 'status_change',
+    message: event.message || '',
+    actor_type: event.actorType || 'system',
+    created_at: event.createdAt || new Date().toISOString(),
+  }));
+  const { data: eventData, error: eventError } = await supabase.from('order_event_logs').upsert(eventRows, { onConflict: 'id' }).select('id');
+  if (eventError) {
+    throw eventError;
+  }
+  summary.logs = eventData?.length || 0;
+
+  const feedbackRows = (state.feedback || []).map((entry) => ({
+    id: normalizeId(entry.id),
+    order_id: normalizeId(entry.orderId),
+    rating: entry.rating || null,
+    comments: entry.comments || null,
+    created_at: entry.createdAt || new Date().toISOString(),
+  }));
+  const { data: feedbackData, error: feedbackError } = await supabase.from('feedback').upsert(feedbackRows, { onConflict: 'id' }).select('id');
+  if (feedbackError) {
+    throw feedbackError;
+  }
+  summary.feedback = feedbackData?.length || 0;
+
+  console.log(JSON.stringify(summary, null, 2));
+}
+
+main().catch((error) => {
+  console.error(error.message || error);
+  process.exitCode = 1;
+});

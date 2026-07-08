@@ -9,10 +9,15 @@
     "dev": "node server.js",
     "seed": "node -e \"require('./lib/seed').writeSeedData(); console.log('Seed data written')\"",
     "reset:data": "node -e \"require('./lib/seed').resetData(); console.log('Data reset complete')\"",
+    "migrate:supabase": "node scripts/migrate-json-to-supabase.js",
     "test": "node --test"
   },
   "engines": {
     "node": ">=20"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "ws": "^8.21.0"
+  }
 }

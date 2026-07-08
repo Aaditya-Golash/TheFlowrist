@@ -22,7 +22,9 @@ TheFlowrist is a concierge-first MVP for milestone flower gifting. The current i
 ## Storage and architecture
 - The app now uses a storage adapter boundary so the rest of the app does not depend directly on file-system details.
 - The default adapter is JSON-backed and still powers the current pilot experience.
-- A placeholder Supabase adapter file exists for later implementation, but no Supabase dependency is installed yet.
+- An optional Supabase adapter is available when the server is started with `STORAGE_BACKEND=supabase`.
+- The server-side adapter uses the official Supabase client and expects `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
+- The SQL schema lives in [supabase/schema.sql](supabase/schema.sql) and the migration helper is [scripts/migrate-json-to-supabase.js](scripts/migrate-json-to-supabase.js).
 
 ## Run locally
 ```bash
@@ -40,6 +42,9 @@ For admin routes, include a cookie named `adminEmail` or an `x-admin-email` head
 - ALLOWED_ORIGINS
 - ADMIN_EMAILS
 - INTERNAL_API_SECRET
+- STORAGE_BACKEND=json|supabase
+- SUPABASE_URL
+- SUPABASE_SERVICE_ROLE_KEY
 
 ## Internal automation endpoints
 These are protected by `INTERNAL_API_SECRET` and return JSON only for trusted automation workflows.
@@ -64,8 +69,9 @@ docker run -p 3000:3000 theflowrist
 
 ## Notes
 - Stripe integration is intentionally scaffolded as a placeholder because the repo does not currently include Stripe infrastructure.
-- The data layer is file-based and suitable for a concierge MVP beta.
-- Supabase migration is planned but not active.
+- The default data layer is JSON-backed and suitable for a concierge MVP beta.
+- Supabase is server-side persistence only for now and is not yet wired to public client access.
+- RLS/auth work remains future work.
 - n8n endpoints are available for future automation.
 - MCP is intentionally not enabled.
 - External repos are references only for future planning.

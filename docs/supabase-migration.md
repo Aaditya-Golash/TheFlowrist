@@ -59,6 +59,24 @@
 ## Future environment variables
 
 - SUPABASE_URL
-- SUPABASE_ANON_KEY
 - SUPABASE_SERVICE_ROLE_KEY
 - INTERNAL_API_SECRET
+- STORAGE_BACKEND=json|supabase
+
+## Local JSON mode
+
+- Keep the default JSON backend by leaving `STORAGE_BACKEND=json` or not setting it.
+- This is the safest current mode for local development and tests.
+
+## Supabase mode
+
+1. Set `STORAGE_BACKEND=supabase`.
+2. Set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
+3. Apply [supabase/schema.sql](../supabase/schema.sql) in your Supabase project.
+4. Run `npm run migrate:supabase` after ensuring [data/app-data.json](../data/app-data.json) exists locally.
+
+## Current limitations
+
+- RLS/auth is not complete yet.
+- The app still uses server-side persistence only.
+- The Supabase adapter is currently a server-side read/write bridge behind the existing interface.
