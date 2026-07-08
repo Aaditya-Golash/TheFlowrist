@@ -1,10 +1,11 @@
 -- Supabase schema for TheFlowrist pilot persistence
 -- RLS should be enabled before public client access is used.
-
-create extension if not exists "uuid-ossp";
+-- IDs are `text`, not `uuid`: the app generates its own string ids
+-- (e.g. `recipient-<timestamp>`) and the migration script writes those
+-- ids as-is, so the columns must accept them rather than only UUIDs.
 
 create table if not exists customers (
-  id uuid primary key default uuid_generate_v4(),
+  id text primary key,
   name text not null,
   email text,
   phone text,
@@ -15,8 +16,8 @@ create table if not exists customers (
 );
 
 create table if not exists recipients (
-  id uuid primary key default uuid_generate_v4(),
-  customer_id uuid not null references customers(id) on delete cascade,
+  id text primary key,
+  customer_id text not null references customers(id) on delete cascade,
   name text not null,
   relationship text,
   phone text,
@@ -31,9 +32,9 @@ create table if not exists recipients (
 );
 
 create table if not exists milestones (
-  id uuid primary key default uuid_generate_v4(),
-  customer_id uuid not null references customers(id) on delete cascade,
-  recipient_id uuid references recipients(id) on delete set null,
+  id text primary key,
+  customer_id text not null references customers(id) on delete cascade,
+  recipient_id text references recipients(id) on delete set null,
   occasion_type text not null,
   occasion_label text,
   event_date date not null,
@@ -51,17 +52,17 @@ create table if not exists milestones (
 );
 
 create table if not exists scheduled_orders (
-  id uuid primary key default uuid_generate_v4(),
-  customer_id uuid not null references customers(id) on delete cascade,
-  recipient_id uuid references recipients(id) on delete set null,
-  milestone_id uuid references milestones(id) on delete set null,
+  id text primary key,
+  customer_id text not null references customers(id) on delete cascade,
+  recipient_id text references recipients(id) on delete set null,
+  milestone_id text references milestones(id) on delete set null,
   event_date date not null,
   planned_charge_date date,
   budget_tier text not null check (budget_tier in ('classic', 'premium', 'signature')),
   estimated_customer_price_cents integer not null default 0,
   delivery_fee_cents integer not null default 0,
   status text not null default 'scheduled' check (status in ('scheduled', 'pre_charge_reminder_sent', 'pending_charge', 'charged', 'sent_to_florist', 'florist_accepted', 'preparing', 'out_for_delivery', 'delivered', 'issue_reported', 'refunded', 'cancelled')),
-  florist_partner_id uuid,
+  florist_partner_id text,
   internal_notes text,
   customer_notes text,
   generated_card_message text,
@@ -74,7 +75,7 @@ create table if not exists scheduled_orders (
 );
 
 create table if not exists florist_partners (
-  id uuid primary key default uuid_generate_v4(),
+  id text primary key,
   name text not null,
   contact_name text,
   email text,
@@ -91,7 +92,7 @@ create table if not exists florist_partners (
 );
 
 create table if not exists service_zones (
-  id uuid primary key default uuid_generate_v4(),
+  id text primary key,
   name text not null,
   prefixes text[] not null default '{}',
   active boolean not null default true,
@@ -102,8 +103,8 @@ create table if not exists service_zones (
 );
 
 create table if not exists payment_consents (
-  id uuid primary key default uuid_generate_v4(),
-  customer_id uuid not null references customers(id) on delete cascade,
+  id text primary key,
+  customer_id text not null references customers(id) on delete cascade,
   stripe_customer_id text,
   stripe_payment_method_id text,
   consent_text_version text,
@@ -117,8 +118,8 @@ create table if not exists payment_consents (
 );
 
 create table if not exists order_event_logs (
-  id uuid primary key default uuid_generate_v4(),
-  order_id uuid not null references scheduled_orders(id) on delete cascade,
+  id text primary key,
+  order_id text not null references scheduled_orders(id) on delete cascade,
   type text not null,
   message text not null,
   actor_type text not null,
@@ -126,8 +127,8 @@ create table if not exists order_event_logs (
 );
 
 create table if not exists feedback (
-  id uuid primary key default uuid_generate_v4(),
-  order_id uuid references scheduled_orders(id) on delete set null,
+  id text primary key,
+  order_id text references scheduled_orders(id) on delete set null,
   rating integer,
   comments text,
   created_at timestamptz not null default now()

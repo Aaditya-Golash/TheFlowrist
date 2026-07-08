@@ -68,6 +68,45 @@ test('root endpoint returns service info', async () => {
   assert.match(response.text, /TheFlowrist/i);
 });
 
+test('landing page includes key trust copy', async () => {
+  resetData();
+  const response = await request('/');
+  assert.equal(response.status, 200);
+  assert.match(response.text, /no weekly subscription/i);
+  assert.match(response.text, /pause or cancel/i);
+  assert.match(response.text, /designer's[- ]choice/i);
+  assert.match(response.text, /toronto/i);
+  assert.match(response.text, /reminder/i);
+});
+
+test('payment page includes no-charge-today copy', async () => {
+  resetData();
+  const response = await request('/account/payment-consent');
+  assert.equal(response.status, 200);
+  assert.match(response.text, /not charged today/i);
+  assert.match(response.text, /remind you before/i);
+  assert.match(response.text, /pause or cancel/i);
+});
+
+test('dashboard includes add important date CTA', async () => {
+  resetData();
+  const response = await request('/dashboard');
+  assert.equal(response.status, 200);
+  assert.match(response.text, /add another important date/i);
+});
+
+test('admin order detail still renders', async () => {
+  resetData();
+  const state = require('../lib/store').getState();
+  const order = state.orders[0];
+  const response = await request(`/admin/orders/${order.id}`, {
+    headers: { cookie: 'adminEmail=admin%40example.com' },
+  });
+  assert.equal(response.status, 200);
+  assert.match(response.text, /Planned charge date/i);
+  assert.match(response.text, /Customer:/i);
+});
+
 test('scheduled order dates calculate correctly', () => {
   resetData();
   assert.equal(calculatePlannedChargeDate('2026-08-15', 5), '2026-08-10');

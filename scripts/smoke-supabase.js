@@ -3,12 +3,14 @@ const path = require('node:path');
 const { config } = require('dotenv');
 const { createClient } = require('@supabase/supabase-js');
 const { validateSupabaseEnvironment } = require('../lib/supabase-env');
+const { ensureWebSocketShim } = require('../lib/ws-shim');
 
 config({ path: path.join(__dirname, '..', '.env') });
 
 async function main() {
   const env = process.env;
   const { supabaseUrl, serviceRoleKey } = validateSupabaseEnvironment(env);
+  ensureWebSocketShim();
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });

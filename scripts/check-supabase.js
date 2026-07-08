@@ -3,6 +3,7 @@ const path = require('node:path');
 const { config } = require('dotenv');
 const { createClient } = require('@supabase/supabase-js');
 const { validateSupabaseEnvironment } = require('../lib/supabase-env');
+const { ensureWebSocketShim } = require('../lib/ws-shim');
 
 config({ path: path.join(__dirname, '..', '.env') });
 
@@ -13,6 +14,7 @@ function formatCount(count) {
 async function main() {
   const env = process.env;
   const { supabaseUrl, serviceRoleKey } = validateSupabaseEnvironment(env);
+  ensureWebSocketShim();
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
@@ -31,12 +33,12 @@ async function main() {
 
   const summaries = [];
   for (const table of requiredTables) {
-    const { data, error } = await supabase.from(table).select('*', { count: 'exact', head: true });
+    const { error, count } = await supabase.from(table).select('*', { count: 'exact', head: true });
     if (error) {
       summaries.push({ table, ok: false, error: error.message });
       continue;
     }
-    summaries.push({ table, ok: true, count: formatCount(data?.length ?? 0) });
+    summaries.push({ table, ok: true, count: formatCount(count ?? 0) });
   }
 
   const failures = summaries.filter((entry) => !entry.ok);
