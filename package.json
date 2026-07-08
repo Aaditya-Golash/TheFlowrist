@@ -9,7 +9,9 @@
     "dev": "node server.js",
     "seed": "node -e \"require('./lib/seed').writeSeedData(); console.log('Seed data written')\"",
     "reset:data": "node -e \"require('./lib/seed').resetData(); console.log('Data reset complete')\"",
+    "check:supabase": "node scripts/check-supabase.js",
     "migrate:supabase": "node scripts/migrate-json-to-supabase.js",
+    "smoke:supabase": "node scripts/smoke-supabase.js",
     "test": "node --test"
   },
   "engines": {
@@ -18,6 +20,7 @@
   "license": "MIT",
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
+    "dotenv": "^16.4.0",
     "ws": "^8.21.0"
   }
 }

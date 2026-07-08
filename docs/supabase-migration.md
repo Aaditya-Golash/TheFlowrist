@@ -58,10 +58,21 @@
 
 ## Required environment variables
 
+- STORAGE_BACKEND=json|supabase
 - SUPABASE_URL
 - SUPABASE_SERVICE_ROLE_KEY
 - INTERNAL_API_SECRET
-- STORAGE_BACKEND=json|supabase
+- ADMIN_EMAILS
+
+Example local `.env` values:
+
+```env
+STORAGE_BACKEND=supabase
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+INTERNAL_API_SECRET=
+ADMIN_EMAILS=
+```
 
 ## Local JSON mode
 
@@ -73,7 +84,10 @@
 1. Set `STORAGE_BACKEND=supabase`.
 2. Set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
 3. Apply [supabase/schema.sql](../supabase/schema.sql) in your Supabase project.
-4. Run `npm run migrate:supabase` after ensuring [data/app-data.json](../data/app-data.json) exists locally.
+4. Run `npm run check:supabase` to verify connectivity and table access.
+5. Run `npm run migrate:supabase -- --dry-run` to preview the import.
+6. Run `npm run migrate:supabase` after ensuring [data/app-data.json](../data/app-data.json) exists locally.
+7. Run `npm run smoke:supabase` for a safe write test against a dedicated smoke-test record set.
 
 ## Current limitations
 

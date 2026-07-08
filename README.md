@@ -46,6 +46,24 @@ For admin routes, include a cookie named `adminEmail` or an `x-admin-email` head
 - SUPABASE_URL
 - SUPABASE_SERVICE_ROLE_KEY
 
+For Supabase-backed runs, put these in a local `.env` file:
+```env
+STORAGE_BACKEND=supabase
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+INTERNAL_API_SECRET=
+ADMIN_EMAILS=
+```
+
+## Supabase commands
+```bash
+npm test
+npm run check:supabase
+npm run migrate:supabase -- --dry-run
+npm run migrate:supabase
+npm run smoke:supabase
+```
+
 ## Internal automation endpoints
 These are protected by `INTERNAL_API_SECRET` and return JSON only for trusted automation workflows.
 

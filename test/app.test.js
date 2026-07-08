@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
 
 const app = require('../server');
 const { writeSeedData } = require('../lib/seed');
@@ -304,4 +305,58 @@ test('internal status endpoint updates order status and logs it', async () => {
   const createdEvent = nextState.orderEvents.find((entry) => entry.orderId === order.id && entry.message.includes('pending_charge'));
   assert.equal(updatedOrder.status, 'pending_charge');
   assert.ok(createdEvent);
+});
+
+test('check script env validation fails clearly', () => {
+  const { validateSupabaseEnvironment } = require('../scripts/check-supabase');
+  assert.throws(() => validateSupabaseEnvironment({}), /SUPABASE_URL|SUPABASE_SERVICE_ROLE_KEY/i);
+});
+
+test('smoke script env validation fails clearly', () => {
+  const { validateSupabaseEnvironment } = require('../scripts/smoke-supabase');
+  assert.throws(() => validateSupabaseEnvironment({}), /SUPABASE_URL|SUPABASE_SERVICE_ROLE_KEY/i);
+});
+
+test('migration dry-run does not require writing', async () => {
+  const { runMigration } = require('../scripts/migrate-json-to-supabase');
+  const result = await runMigration({
+    env: {
+      SUPABASE_URL: 'https://example.supabase.co',
+      SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+    },
+    dryRun: true,
+    dataFilePath: path.join(__dirname, '..', 'data', 'app-data.json'),
+    createClient: () => ({
+      from: () => ({
+        upsert: () => ({ select: () => ({ then: () => ({ catch: () => {} }) }) }),
+      }),
+    }),
+  });
+  assert.equal(result.dryRun, true);
+  assert.ok(result.summary);
+});
+
+test('supabase key fallback logic works', () => {
+  const { getSupabaseConfig } = require('../lib/supabase-env');
+  const config = getSupabaseConfig({
+    SUPABASE_URL: 'https://example.supabase.co',
+    SUPABASE_SECRET_KEY: 'fallback-secret',
+  });
+  assert.equal(config.serviceRoleKey, 'fallback-secret');
+});
+
+test('scripts do not log secret values', async () => {
+  const { runMigration } = require('../scripts/migrate-json-to-supabase');
+  const lines = [];
+  const result = await runMigration({
+    env: {
+      SUPABASE_URL: 'https://example.supabase.co',
+      SUPABASE_SERVICE_ROLE_KEY: 'super-secret-value',
+    },
+    dryRun: true,
+    dataFilePath: path.join(__dirname, '..', 'data', 'app-data.json'),
+    logger: (message) => lines.push(message),
+  });
+  assert.equal(result.dryRun, true);
+  assert.equal(lines.join('\n').includes('super-secret-value'), false);
 });
