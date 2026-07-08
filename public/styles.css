@@ -15,6 +15,7 @@
 
   --color-text-espresso: #261311;
   --color-text-charcoal: #3C3A34;
+  --color-text-graphite: #333333;
   --color-onyx: #0A0A0A;
 
   --color-metal-brass: #CCBD77;
@@ -28,19 +29,22 @@
   --fs-small: clamp(0.81rem, calc(0.78rem + 0.15vw), 0.9rem);
   --fs-caption: clamp(0.68rem, calc(0.65rem + 0.1vw), 0.75rem);
 
+  --space-xxs: 0.25rem;
   --space-xs: 0.5rem;
   --space-sm: 0.75rem;
   --space-md: 1rem;
   --space-lg: 1.5rem;
   --space-xl: 2rem;
   --space-xxl: 3rem;
-  --space-section: 6rem;
+  --space-section: clamp(4rem, 8vw, 8rem);
   --space-section-mobile: 3rem;
 
-  --radius: 8px;
+  --radius: 0px;
   --transition-ease-luxury: cubic-bezier(0.22, 1, 0.36, 1);
   --transition-ease-slow: cubic-bezier(0.25, 1, 0.5, 1);
-  --duration-hover: 250ms;
+  --duration-hover: 280ms;
+  --duration-transition: 450ms;
+  --duration-morph: 550ms;
   --duration-page-entry: 750ms;
 }
 
@@ -57,7 +61,7 @@ body {
   font-family: var(--font-body);
   font-size: var(--fs-body);
   background: var(--color-bg-primary);
-  color: var(--color-text-espresso);
+  color: var(--color-text-graphite);
   line-height: 1.6;
 }
 
@@ -77,7 +81,7 @@ h1, h2, h3, h4,
 .display-serif,
 .brand-mark {
   font-family: var(--font-display);
-  font-weight: 600;
+  font-weight: 500;
   color: var(--color-text-espresso);
   margin: 0 0 var(--space-sm);
 }
@@ -95,6 +99,9 @@ small,
 
 p {
   margin: 0 0 var(--space-md);
+  max-width: 65ch;
+  line-height: 1.55;
+  letter-spacing: 0;
 }
 
 .prose,
@@ -113,6 +120,50 @@ p {
   padding: 0 var(--space-lg) var(--space-xxl);
 }
 
+.luxe-grid-container {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  column-gap: var(--space-lg);
+  max-width: 1280px;
+  margin-inline: auto;
+  padding-inline: clamp(1.5rem, 5vw, 3rem);
+}
+
+.feature-text-block {
+  grid-column: span 5;
+}
+
+.feature-media-block {
+  grid-column: span 7;
+}
+
+.card-deck-wrapper {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-lg);
+}
+
+.luxe-editorial-card {
+  display: grid;
+  grid-template-rows: subgrid;
+  grid-row: span 3;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-parchment);
+  padding: var(--space-xl);
+}
+
+.card-header-row {
+  grid-row: 1;
+}
+
+.card-description-row {
+  grid-row: 2;
+}
+
+.card-action-row {
+  grid-row: 3;
+}
+
 main {
   animation: fadeInUp var(--duration-page-entry) var(--transition-ease-slow) both;
 }
@@ -129,10 +180,10 @@ main {
 .brand-mark {
   font-family: var(--font-display);
   font-size: 1.5rem;
-  font-weight: 600;
+  font-weight: 400;
   color: var(--color-text-espresso);
   text-decoration: none;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.16em;
 }
 
 .nav-links {
@@ -146,8 +197,7 @@ main {
   color: var(--color-text-charcoal);
   text-decoration: none;
   font-size: var(--fs-small);
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   transition: color var(--duration-hover) var(--transition-ease-luxury);
 }
 
@@ -167,8 +217,7 @@ main {
   font: inherit;
   color: var(--color-text-charcoal);
   font-size: var(--fs-small);
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   cursor: pointer;
   transition: color var(--duration-hover) var(--transition-ease-luxury);
 }
@@ -225,27 +274,27 @@ main {
 .hero-kicker {
   display: inline-block;
   font-size: var(--fs-caption);
-  letter-spacing: 0.12em;
+  letter-spacing: 0.15em;
   text-transform: uppercase;
   color: var(--color-primary-olive);
-  border: 1px solid var(--color-border-parchment);
-  border-radius: var(--radius);
-  padding: 6px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--color-border-parchment);
+  padding: 0 0 var(--space-xxs);
   margin-bottom: var(--space-md);
-  background: var(--color-bg-secondary);
+  background: transparent;
 }
 
 .pill {
   display: inline-block;
   font-size: var(--fs-caption);
-  letter-spacing: 0.12em;
+  letter-spacing: 0.15em;
   text-transform: uppercase;
   color: var(--color-primary-olive);
-  border: 1px solid var(--color-border-parchment);
-  border-radius: var(--radius);
-  padding: 6px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--color-border-parchment);
+  padding: 0 0 var(--space-xxs);
   margin-bottom: var(--space-md);
-  background: var(--color-bg-secondary);
+  background: transparent;
 }
 
 .hero-title {
@@ -610,11 +659,12 @@ input:focus, select:focus, textarea:focus {
   border-radius: var(--radius);
   text-decoration: none;
   font-size: var(--fs-caption);
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
   border: 1px solid transparent;
   cursor: pointer;
-  transition: background var(--duration-hover) var(--transition-ease-luxury), border-color var(--duration-hover) var(--transition-ease-luxury), color var(--duration-hover) var(--transition-ease-luxury);
+  transition: transform var(--duration-hover) var(--transition-ease-luxury), background var(--duration-hover) var(--transition-ease-luxury), border-color var(--duration-hover) var(--transition-ease-luxury), color var(--duration-hover) var(--transition-ease-luxury);
+  will-change: transform;
 }
 
 .btn-primary, .btn:not(.btn-secondary):not(.btn-danger) {
@@ -626,6 +676,7 @@ input:focus, select:focus, textarea:focus {
 .btn-primary:hover, .btn:not(.btn-secondary):not(.btn-danger):hover {
   background: var(--color-primary-olive);
   border-color: var(--color-primary-olive);
+  transform: translateY(-1px);
 }
 
 .btn-secondary {
@@ -643,11 +694,13 @@ input:focus, select:focus, textarea:focus {
 .btn.secondary:hover {
   border-color: var(--color-primary-olive);
   color: var(--color-primary-olive);
+  transform: translateY(-1px);
 }
 
 .btn-secondary:hover {
   border-color: var(--color-primary-olive);
   color: var(--color-primary-olive);
+  transform: translateY(-1px);
 }
 
 .btn-danger {
@@ -659,6 +712,7 @@ input:focus, select:focus, textarea:focus {
 .btn-danger:hover {
   background: var(--color-danger);
   color: #fff;
+  transform: translateY(-1px);
 }
 
 .badge, .status, .status-badge {
@@ -864,4 +918,17 @@ input:focus, select:focus, textarea:focus {
   .page-shell { padding: 0 var(--space-md) var(--space-xl); }
   .section { padding: var(--space-section-mobile) 0; }
   .hero { padding: var(--space-lg) 0; }
+  .luxe-grid-container,
+  .card-deck-wrapper {
+    grid-template-columns: 1fr;
+  }
+  .feature-text-block,
+  .feature-media-block,
+  .luxe-editorial-card {
+    grid-column: 1;
+  }
+  .luxe-editorial-card {
+    grid-template-rows: auto;
+    grid-row: auto;
+  }
 }

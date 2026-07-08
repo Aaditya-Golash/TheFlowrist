@@ -8,6 +8,9 @@ Use this checklist before private-pilot hosting.
 - Confirm body text uses Inter.
 - Confirm main copy max-width is approximately `65ch`.
 - Confirm cards use parchment borders (`#DCD7D3`).
+- Confirm primary cards and buttons use square editorial corners.
+- Confirm navigation and buttons are sentence case, not loud uppercase CTAs.
+- Confirm the wordmark has open tracking and quiet graphite/espresso ink.
 - Confirm the account/payment consent vault panel is onyx (`#0A0A0A`).
 - Confirm style mood cards render on the milestone form.
 - Confirm mobile width does not overflow.

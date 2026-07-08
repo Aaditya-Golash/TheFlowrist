@@ -206,9 +206,15 @@ test('global CSS is served from public assets', async () => {
   assert.match(response.text, /--color-primary-sage: #9CAF88/);
   assert.match(response.text, /--color-text-espresso: #261311/);
   assert.match(response.text, /--color-text-charcoal: #3C3A34/);
+  assert.match(response.text, /--color-text-graphite: #333333/);
   assert.match(response.text, /--color-onyx: #0A0A0A/);
   assert.match(response.text, /--color-metal-brass: #CCBD77/);
   assert.match(response.text, /--color-danger: #8B3A3A/);
+  assert.match(response.text, /--radius: 0px/);
+  assert.match(response.text, /--duration-transition: 450ms/);
+  assert.match(response.text, /--duration-morph: 550ms/);
+  assert.match(response.text, /\.luxe-grid-container/);
+  assert.match(response.text, /\.card-deck-wrapper/);
   assert.match(response.text, /max-width: 65ch/);
   assert.match(response.text, /prefers-reduced-motion/);
   assert.match(response.text, /\.vault-panel/);
