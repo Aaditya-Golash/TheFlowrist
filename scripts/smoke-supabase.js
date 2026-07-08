@@ -7,11 +7,10 @@ const { ensureWebSocketShim } = require('../lib/ws-shim');
 
 config({ path: path.join(__dirname, '..', '.env') });
 
-async function main() {
-  const env = process.env;
+async function runSmoke({ env = process.env, createClient: createClientImpl = createClient, logger = console.log } = {}) {
   const { supabaseUrl, serviceRoleKey } = validateSupabaseEnvironment(env);
   ensureWebSocketShim();
-  const supabase = createClient(supabaseUrl, serviceRoleKey, {
+  const supabase = createClientImpl(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
@@ -62,17 +61,24 @@ async function main() {
     throw readError;
   }
 
-  console.log('Supabase smoke test passed.');
-  console.log(JSON.stringify({
+  const summary = {
     customerId,
     recipientId,
     milestoneId,
     orderId,
     consentId,
-    updatedOrder: updatedOrder?.[0] || null,
-    revokedConsent: consentData?.[0] || null,
-    readBack: readBack?.[0] || null,
-  }, null, 2));
+    updatedOrderStatus: updatedOrder?.[0]?.status || null,
+    consentActive: consentData?.[0]?.active ?? null,
+    readBackCount: readBack?.length || 0,
+  };
+
+  logger('Supabase smoke test passed.');
+  logger(JSON.stringify(summary, null, 2));
+  return summary;
+}
+
+async function main() {
+  await runSmoke({ env: process.env, logger: console.log });
 }
 
 if (require.main === module) {
@@ -84,4 +90,5 @@ if (require.main === module) {
 
 module.exports = {
   validateSupabaseEnvironment,
+  runSmoke,
 };

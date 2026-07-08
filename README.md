@@ -34,7 +34,51 @@ npm start
 
 Open http://localhost:3000/ to view the public experience.
 
-For admin routes in pilot mode, include a cookie named `adminEmail` or an `x-admin-email` header that matches `ADMIN_EMAILS`.
+For admin routes in pilot mode, sign in at `/admin/login` with an email listed in `ADMIN_EMAILS`. The `x-admin-email` test header is only honored when `NODE_ENV=test`.
+
+## Localhost readiness checklist
+
+### JSON mode local testing
+
+Use this mode for safe UI and route testing without live Supabase writes:
+
+```bash
+npm install
+npm test
+STORAGE_BACKEND=json AUTH_BACKEND=pilot npm start
+```
+
+Then check:
+
+```bash
+curl http://localhost:3000/health
+curl http://localhost:3000/ready
+curl http://localhost:3000/internal/orders/upcoming
+curl -H "x-internal-api-secret: wrong" http://localhost:3000/internal/orders/upcoming
+```
+
+The internal endpoint calls without the configured secret, or with the wrong secret, should return `401` JSON.
+
+### Supabase mode local testing
+
+Use this mode only with local `.env` values that are not committed:
+
+```bash
+npm test
+npm run check:supabase
+npm run migrate:supabase -- --dry-run
+npm run smoke:supabase
+STORAGE_BACKEND=supabase AUTH_BACKEND=supabase npm start
+```
+
+Then check:
+
+```bash
+curl http://localhost:3000/health
+curl http://localhost:3000/ready
+```
+
+`/ready` reports whether required env vars are present, but it never returns secret values. `npm run smoke:supabase` writes clearly named `smoke-*` rows to the configured Supabase project.
 
 ## Authentication
 The app supports two auth backends, selected with `AUTH_BACKEND`:
