@@ -39,9 +39,12 @@
 
 ## Auth plan
 
-- Introduce Supabase Auth for pilot staff first.
-- Keep the current cookie-based admin flow as a temporary fallback.
-- Add customer sign-in later when the concierge experience expands.
+Implemented. See [docs/auth.md](auth.md) for the full picture:
+
+- `AUTH_BACKEND=pilot` (default) keeps the existing temporary cookie-based admin/customer flow.
+- `AUTH_BACKEND=supabase` uses real Supabase Auth for both admin and customer sign-in, behind a shared auth adapter interface (`lib/auth/`).
+- Admin access in Supabase mode still requires the signed-in email to be listed in `ADMIN_EMAILS`.
+- Public sign-up is intentionally not implemented; private pilot users are created manually in the Supabase dashboard.
 
 ## Photo proof storage plan
 

@@ -25,6 +25,14 @@ function createApp() {
 }
 
 if (require.main === module) {
+  const { validateProductionEnvironment } = require('./lib/env-check');
+  const productionCheck = validateProductionEnvironment(process.env);
+  if (!productionCheck.ok) {
+    console.error('Refusing to start: NODE_ENV=production is missing required configuration.');
+    productionCheck.errors.forEach((message) => console.error(`- ${message}`));
+    process.exit(1);
+  }
+
   const server = createApp();
   server.listen(port, () => {
     console.log(`Server listening on port ${port}`);

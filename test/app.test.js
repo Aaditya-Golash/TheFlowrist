@@ -6,6 +6,9 @@ const app = require('../server');
 const { writeSeedData } = require('../lib/seed');
 const { resolveStorageAdapter } = require('../lib/store');
 const { createSupabaseStore } = require('../lib/supabaseStore');
+const { resolveAuthBackend, resetAuthAdapter } = require('../lib/auth');
+const { createSupabaseAuthAdapter } = require('../lib/auth/supabaseAuth');
+const { buildReadiness, validateProductionEnvironment } = require('../lib/env-check');
 const {
   calculatePlannedChargeDate,
   createScheduledOrderFromMilestone,
@@ -40,8 +43,16 @@ const resetData = () => {
   process.env.ADMIN_EMAILS = 'admin@example.com';
   process.env.INTERNAL_API_SECRET = 'test-secret';
   process.env.STORAGE_BACKEND = 'json';
+  process.env.AUTH_BACKEND = 'pilot';
+  delete process.env.SUPABASE_URL;
+  delete process.env.SUPABASE_ANON_KEY;
+  resetAuthAdapter();
   writeSeedData();
 };
+
+const getSetCookies = (headers) => (
+  typeof headers.getSetCookie === 'function' ? headers.getSetCookie() : [headers.get('set-cookie') || '']
+);
 
 test('health endpoint returns ok', async () => {
   resetData();
@@ -360,4 +371,147 @@ test('scripts do not log secret values', async () => {
   });
   assert.equal(result.dryRun, true);
   assert.equal(lines.join('\n').includes('super-secret-value'), false);
+});
+
+test('AUTH_BACKEND defaults to pilot', () => {
+  assert.equal(resolveAuthBackend({}), 'pilot');
+  assert.equal(resolveAuthBackend({ AUTH_BACKEND: 'pilot' }), 'pilot');
+});
+
+test('invalid AUTH_BACKEND fails clearly', () => {
+  assert.throws(() => resolveAuthBackend({ AUTH_BACKEND: 'firebase' }), /AUTH_BACKEND/i);
+});
+
+test('supabase auth backend requires env vars', () => {
+  assert.throws(() => createSupabaseAuthAdapter({}), /SUPABASE_URL|SUPABASE_ANON_KEY/i);
+});
+
+test('pilot login sets a customer session cookie', async () => {
+  resetData();
+  const response = await request('/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'email=mina@example.com',
+  });
+  assert.equal(response.status, 302);
+  const cookies = getSetCookies(response.headers).join('; ');
+  assert.match(cookies, /pilotCustomerEmail=/);
+});
+
+test('logout clears session cookie', async () => {
+  resetData();
+  const response = await request('/logout', { method: 'POST' });
+  assert.equal(response.status, 302);
+  const cookies = getSetCookies(response.headers).join('; ');
+  assert.match(cookies, /pilotCustomerEmail=.*Max-Age=0/);
+});
+
+test('admin guard still works in pilot mode', async () => {
+  resetData();
+  const response = await request('/admin', { headers: { cookie: 'adminEmail=someone-else@example.com' } });
+  assert.equal(response.status, 302);
+  assert.match(response.headers.get('location') || '', /\/admin\/login/);
+});
+
+test('non-admin email is rejected by admin guard', async () => {
+  const adapter = createSupabaseAuthAdapter(
+    {
+      SUPABASE_URL: 'https://example.supabase.co',
+      SUPABASE_ANON_KEY: 'anon-key',
+      ADMIN_EMAILS: 'admin@example.com',
+    },
+    {
+      createClient: () => ({
+        auth: {
+          getUser: async () => ({ data: { user: { email: 'notadmin@example.com', id: 'user-1' } }, error: null }),
+        },
+      }),
+    },
+  );
+  const req = { headers: { cookie: 'sbAccessToken=fake-token' } };
+  const headers = {};
+  const res = {
+    writeHead(status, responseHeaders) { this.statusCode = status; Object.assign(headers, responseHeaders); },
+    end() {},
+  };
+  const allowed = await adapter.requireAdmin(req, res);
+  assert.equal(allowed, false);
+  assert.equal(res.statusCode, 403);
+});
+
+test('customer-protected routes redirect to login in Supabase mode when unauthenticated', async () => {
+  resetData();
+  process.env.AUTH_BACKEND = 'supabase';
+  process.env.SUPABASE_URL = 'https://example.supabase.co';
+  process.env.SUPABASE_ANON_KEY = 'anon-key';
+  resetAuthAdapter();
+  try {
+    const response = await request('/dashboard');
+    assert.equal(response.status, 302);
+    assert.match(response.headers.get('location') || '', /\/login/);
+  } finally {
+    resetData();
+  }
+});
+
+test('/ready returns JSON', async () => {
+  resetData();
+  const response = await request('/ready');
+  assert.ok(response.status === 200 || response.status === 503);
+  const payload = JSON.parse(response.text);
+  assert.equal(typeof payload.ready, 'boolean');
+  assert.ok(payload.checks);
+});
+
+test('readiness check reflects invalid backends', () => {
+  const readiness = buildReadiness({ STORAGE_BACKEND: 'redis', AUTH_BACKEND: 'firebase' });
+  assert.equal(readiness.ready, false);
+  assert.equal(readiness.checks.storageBackend.ok, false);
+  assert.equal(readiness.checks.authBackend.ok, false);
+});
+
+test('production mode rejects missing required env vars', () => {
+  const result = validateProductionEnvironment({ NODE_ENV: 'production' });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.length > 0);
+});
+
+test('production mode accepts valid required env var shape', () => {
+  const result = validateProductionEnvironment({
+    NODE_ENV: 'production',
+    STORAGE_BACKEND: 'json',
+    AUTH_BACKEND: 'pilot',
+    INTERNAL_API_SECRET: 'secret',
+    ADMIN_EMAILS: 'admin@example.com',
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.errors, []);
+});
+
+test('production mode requires supabase env vars when selected', () => {
+  const result = validateProductionEnvironment({
+    NODE_ENV: 'production',
+    STORAGE_BACKEND: 'supabase',
+    AUTH_BACKEND: 'supabase',
+    INTERNAL_API_SECRET: 'secret',
+    ADMIN_EMAILS: 'admin@example.com',
+  });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((message) => /SUPABASE_URL/.test(message)));
+});
+
+test('cookies are marked secure in production', async () => {
+  resetData();
+  process.env.NODE_ENV = 'production';
+  try {
+    const response = await request('/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'email=mina@example.com',
+    });
+    const cookies = getSetCookies(response.headers).join('; ');
+    assert.match(cookies, /Secure/);
+  } finally {
+    process.env.NODE_ENV = 'test';
+  }
 });
