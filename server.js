@@ -1,13 +1,13 @@
 const http = require('http');
-const { URL } = require('url');
+const { createRouter } = require('./lib/routes');
 
 const port = Number(process.env.PORT || 3000);
 const env = process.env.NODE_ENV || 'development';
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000').split(',');
 
 function createApp() {
+  const router = createRouter();
   return http.createServer((req, res) => {
-    const requestUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const origin = req.headers.origin;
 
     if (origin && allowedOrigins.includes(origin)) {
@@ -19,20 +19,7 @@ function createApp() {
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Permissions-Policy', 'geolocation=(), microphone=()');
 
-    if (req.method === 'GET' && requestUrl.pathname === '/health') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok', environment: env }));
-      return;
-    }
-
-    if (req.method === 'GET' && requestUrl.pathname === '/') {
-      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('TheFlowrist service is running.');
-      return;
-    }
-
-    res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'not_found' }));
+    router(req, res);
   });
 }
 
