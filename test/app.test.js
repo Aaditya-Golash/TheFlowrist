@@ -157,17 +157,28 @@ test('root endpoint returns service info', async () => {
   const response = await request('/');
   assert.equal(response.status, 200);
   assert.match(response.text, /TheFlowrist/i);
+  assert.match(response.text, /\/public\/styles\.css/);
 });
 
 test('landing page includes key trust copy', async () => {
   resetData();
   const response = await request('/');
   assert.equal(response.status, 200);
+  assert.match(response.text, /Never forget flowers/i);
   assert.match(response.text, /no weekly subscription/i);
   assert.match(response.text, /pause or cancel/i);
   assert.match(response.text, /designer's[- ]choice/i);
   assert.match(response.text, /toronto/i);
   assert.match(response.text, /reminder/i);
+});
+
+test('global CSS is served from public assets', async () => {
+  resetData();
+  const response = await request('/public/styles.css');
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type') || '', /text\/css/);
+  assert.match(response.text, /--font-display/);
+  assert.match(response.text, /\.vault-panel/);
 });
 
 test('payment page includes no-charge-today copy', async () => {
