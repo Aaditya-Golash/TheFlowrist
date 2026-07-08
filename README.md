@@ -1,4 +1,4 @@
-# TheFlowrist
+# TheFlowerist
 
 This is a concierge MVP.
 No real payments yet.
@@ -7,7 +7,7 @@ No Playwright automation yet.
 JSON storage is temporary.
 Admin login is temporary pilot access unless AUTH_BACKEND=supabase is configured.
 
-TheFlowrist is a concierge-first MVP for milestone flower gifting. The current implementation uses a lightweight Node.js HTTP server and a JSON-backed store so the experience can be tested locally without adding a full database stack.
+TheFlowerist is a concierge-first MVP for milestone flower gifting. The current implementation uses a lightweight Node.js HTTP server and a JSON-backed store so the experience can be tested locally without adding a full database stack.
 
 ## What is included
 - landing page and customer dashboard
@@ -83,8 +83,8 @@ curl http://localhost:3000/ready
 ## Authentication
 The app supports two auth backends, selected with `AUTH_BACKEND`:
 
-- `pilot` (default) — the existing temporary local login. Customers sign in with just an email at `/login`; admins sign in with just an email at `/admin/login`. No passwords, no real sessions beyond a demo cookie.
-- `supabase` — real Supabase Auth. Customers and admins sign in with email + password at `/login` and `/admin/login`. Sessions are stored in secure, HttpOnly cookies. Admin access still requires the signed-in email to be listed in `ADMIN_EMAILS`.
+- `pilot` (default) - the existing temporary local login. Customers sign in with just an email at `/login`; admins sign in with just an email at `/admin/login`. No passwords, no real sessions beyond a demo cookie.
+- `supabase` - real Supabase Auth. Customers and admins sign in with email + password at `/login` and `/admin/login`. Sessions are stored in secure, HttpOnly cookies. Admin access still requires the signed-in email to be listed in `ADMIN_EMAILS`.
 
 See [docs/auth.md](docs/auth.md) for full details, including how to create private pilot users in Supabase Auth (there is no public sign-up yet).
 
@@ -120,6 +120,16 @@ npm run migrate:supabase
 npm run smoke:supabase
 ```
 
+## Pricing source of truth
+
+Current customer-facing tiers live in [lib/pricing.js](lib/pricing.js) and should be treated as the only active pricing source:
+
+- Classic: $145
+- Premium: $195
+- Signature: $275
+
+Older $75 / $120 / $200 assumptions are historical only and should not appear in active UI or customer-facing copy.
+
 ## Health and readiness
 - `GET /health` confirms the process is alive.
 - `GET /ready` returns JSON describing whether the selected storage/auth backends and their required env vars are valid for the current environment.
@@ -147,16 +157,16 @@ npm test
 
 ## Docker
 ```bash
-docker build -t theflowrist .
-docker run -p 3000:3000 theflowrist
+docker build -t theflowerist .
+docker run -p 3000:3000 theflowerist
 ```
 
 ## Notes
 - Stripe integration is intentionally scaffolded as a placeholder because the repo does not currently include Stripe infrastructure.
 - The default data layer is JSON-backed and suitable for a concierge MVP beta.
 - Supabase is server-side persistence only for now and is not yet wired to public client access.
-- Supabase Auth is available as an optional backend (`AUTH_BACKEND=supabase`); see [docs/auth.md](docs/auth.md). Public sign-up is not enabled — pilot users are created manually in the Supabase dashboard.
-- RLS policies are defined in [supabase/schema.sql](supabase/schema.sql); the app itself still talks to Supabase only via the service-role key (which bypasses RLS) — see [docs/security.md](docs/security.md).
+- Supabase Auth is available as an optional backend (`AUTH_BACKEND=supabase`); see [docs/auth.md](docs/auth.md). Public sign-up is not enabled - pilot users are created manually in the Supabase dashboard.
+- RLS policies are defined in [supabase/schema.sql](supabase/schema.sql); the app itself still talks to Supabase only via the service-role key (which bypasses RLS) - see [docs/security.md](docs/security.md).
 - n8n endpoints are available for future automation.
 - MCP is intentionally not enabled.
 - External repos are references only for future planning.

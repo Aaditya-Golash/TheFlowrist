@@ -1,4 +1,4 @@
--- Supabase schema for TheFlowrist pilot persistence
+-- Supabase schema for TheFlowerist pilot persistence
 -- RLS should be enabled before public client access is used.
 -- IDs are `text`, not `uuid`: the app generates its own string ids
 -- (e.g. `recipient-<timestamp>`) and the migration script writes those

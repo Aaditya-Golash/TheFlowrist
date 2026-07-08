@@ -1,7 +1,7 @@
 {
-  "name": "theflowrist",
+  "name": "theflowerist",
   "version": "1.0.0",
-  "description": "Production-ready starter for TheFlowrist",
+  "description": "Production-ready starter for TheFlowerist",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {

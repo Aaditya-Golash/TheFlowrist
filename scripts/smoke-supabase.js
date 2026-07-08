@@ -3,6 +3,7 @@ const path = require('node:path');
 const { config } = require('dotenv');
 const { createClient } = require('@supabase/supabase-js');
 const { validateSupabaseEnvironment } = require('../lib/supabase-env');
+const { getPricingTier } = require('../lib/pricing');
 const { ensureWebSocketShim } = require('../lib/ws-shim');
 
 config({ path: path.join(__dirname, '..', '.env') });
@@ -24,7 +25,7 @@ async function runSmoke({ env = process.env, createClient: createClientImpl = cr
   const customerInsert = { id: customerId, name: 'Smoke Test Customer', email, phone: '+1-555-0100', marketing_email_consent: true, marketing_sms_consent: false };
   const recipientInsert = { id: recipientId, customer_id: customerId, name: 'Smoke Test Recipient', relationship: 'friend', phone: '+1-555-0101', address_line_1: '1 Test Ave', city: 'Toronto', province: 'ON', postal_code: 'M5V 2T6' };
   const milestoneInsert = { id: milestoneId, customer_id: customerId, recipient_id: recipientId, occasion_type: 'birthday', occasion_label: 'Smoke Test', event_date: '2026-08-15', budget_tier: 'classic', status: 'active' };
-  const orderInsert = { id: orderId, customer_id: customerId, recipient_id: recipientId, milestone_id: milestoneId, event_date: '2026-08-15', planned_charge_date: '2026-08-10', budget_tier: 'classic', status: 'scheduled', estimated_customer_price_cents: 15000, delivery_fee_cents: 1200 };
+  const orderInsert = { id: orderId, customer_id: customerId, recipient_id: recipientId, milestone_id: milestoneId, event_date: '2026-08-15', planned_charge_date: '2026-08-10', budget_tier: 'classic', status: 'scheduled', estimated_customer_price_cents: getPricingTier('classic').customerPriceCents, delivery_fee_cents: 1200 };
   const eventInsert = { id: `smoke-event-${Date.now()}`, order_id: orderId, type: 'status_change', message: 'Smoke test event', actor_type: 'system' };
   const consentInsert = { id: consentId, customer_id: customerId, consent_text_version: 'v1', active: true };
 

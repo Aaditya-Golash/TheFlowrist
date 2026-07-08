@@ -1,4 +1,4 @@
-/* TheFlowrist design system — restrained editorial luxury concierge aesthetic. */
+/* TheFlowerist design system - restrained editorial luxury concierge aesthetic. */
 
 :root {
   color-scheme: light;
@@ -39,7 +39,9 @@
 
   --radius: 8px;
   --transition-ease-luxury: cubic-bezier(0.22, 1, 0.36, 1);
+  --transition-ease-slow: cubic-bezier(0.25, 1, 0.5, 1);
   --duration-hover: 250ms;
+  --duration-page-entry: 750ms;
 }
 
 * {
@@ -59,11 +61,21 @@ body {
   line-height: 1.6;
 }
 
+body,
+button,
+input,
+select,
+textarea {
+  font-family: var(--font-body);
+}
+
 a {
   color: var(--color-primary-olive);
 }
 
-h1, h2, h3, h4 {
+h1, h2, h3, h4,
+.display-serif,
+.brand-mark {
   font-family: var(--font-display);
   font-weight: 600;
   color: var(--color-text-espresso);
@@ -72,16 +84,37 @@ h1, h2, h3, h4 {
 
 h1 { font-size: var(--fs-h1); }
 h2 { font-size: var(--fs-h2); }
-h3 { font-size: var(--fs-h3); }
+h3, .card-title { font-size: var(--fs-h3); }
+
+small,
+.field-hint,
+.helper,
+.meta {
+  font-size: var(--fs-small);
+}
 
 p {
   margin: 0 0 var(--space-md);
+}
+
+.prose,
+.hero-copy,
+.section-copy,
+.section-lead,
+.card-copy,
+.faq-answer,
+.empty-state p {
+  max-width: 65ch;
 }
 
 .page-shell {
   max-width: 1120px;
   margin: 0 auto;
   padding: 0 var(--space-lg) var(--space-xxl);
+}
+
+main {
+  animation: fadeInUp var(--duration-page-entry) var(--transition-ease-slow) both;
 }
 
 .site-header {
@@ -235,14 +268,25 @@ p {
 }
 
 .card {
-  background: #FBF8F3;
+  background: rgba(237, 234, 224, 0.62);
   border: 1px solid var(--color-border-parchment);
   border-radius: var(--radius);
   padding: var(--space-lg);
+  transition: border-color var(--duration-hover) var(--transition-ease-luxury), transform var(--duration-hover) var(--transition-ease-luxury);
+}
+
+.overline {
+  font-size: var(--fs-caption);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.card:hover {
+  border-color: var(--color-primary-sage);
 }
 
 .panel {
-  background: #FBF8F3;
+  background: rgba(237, 234, 224, 0.72);
   border: 1px solid var(--color-border-parchment);
   border-radius: var(--radius);
   padding: var(--space-xl);
@@ -333,7 +377,7 @@ p {
   flex: 0 0 auto;
   width: 32px;
   height: 32px;
-  border-radius: 50%;
+  border-radius: var(--radius);
   border: 1px solid var(--color-primary-olive);
   color: var(--color-primary-olive);
   font-family: var(--font-display);
@@ -367,7 +411,13 @@ p {
   border-radius: var(--radius);
   padding: var(--space-lg);
   text-align: center;
-  background: #FBF8F3;
+  background: rgba(237, 234, 224, 0.7);
+  transition: border-color var(--duration-hover) var(--transition-ease-luxury), transform var(--duration-hover) var(--transition-ease-luxury), background var(--duration-hover) var(--transition-ease-luxury);
+}
+
+.tier-card:hover {
+  border-color: var(--color-primary-sage);
+  transform: translateY(-2px);
 }
 
 .tier-card h3 { margin: 0 0 4px; }
@@ -407,6 +457,10 @@ p {
   margin: var(--space-sm) 0 0;
 }
 
+.faq-answer {
+  display: block;
+}
+
 table, .data-table table {
   width: 100%;
   border-collapse: collapse;
@@ -435,7 +489,7 @@ th {
 }
 
 .form-card {
-  background: #FBF8F3;
+  background: rgba(237, 234, 224, 0.74);
   border: 1px solid var(--color-border-parchment);
   border-radius: var(--radius);
   padding: var(--space-xl);
@@ -524,13 +578,18 @@ input:focus, select:focus, textarea:focus {
   border-radius: var(--radius);
   padding: var(--space-md);
   text-align: center;
-  background: #FBF8F3;
-  transition: border-color var(--duration-hover) var(--transition-ease-luxury), background var(--duration-hover) var(--transition-ease-luxury);
+  background: rgba(237, 234, 224, 0.74);
+  transition: border-color var(--duration-hover) var(--transition-ease-luxury), background var(--duration-hover) var(--transition-ease-luxury), transform var(--duration-hover) var(--transition-ease-luxury);
 }
 
 .mood-card input:checked + .mood-card-body {
   border-color: var(--color-primary-olive);
   background: var(--color-bg-secondary);
+}
+
+.mood-card:hover .mood-card-body {
+  border-color: var(--color-primary-sage);
+  transform: translateY(-2px);
 }
 
 .mood-card-body h4 {
@@ -550,7 +609,7 @@ input:focus, select:focus, textarea:focus {
   padding: 12px 22px;
   border-radius: var(--radius);
   text-decoration: none;
-  font-size: var(--fs-small);
+  font-size: var(--fs-caption);
   letter-spacing: 0.03em;
   text-transform: uppercase;
   border: 1px solid transparent;
@@ -646,15 +705,19 @@ input:focus, select:focus, textarea:focus {
 
 .timeline li:last-child { border-bottom: none; }
 
-.vault-panel {
-  background: var(--color-onyx);
-  color: #F3E7DB;
+.vault-panel,
+.secure-panel,
+.account-security-panel {
+  background: #0A0A0A;
+  color: #fff;
   border-radius: var(--radius);
   padding: var(--space-xl);
-  border: 1px solid #2A2A2A;
+  border: 1px solid #3C3A34;
 }
 
-.vault-panel h1, .vault-panel h2, .vault-panel h3, .vault-panel h4 {
+.vault-panel h1, .vault-panel h2, .vault-panel h3, .vault-panel h4,
+.secure-panel h1, .secure-panel h2, .secure-panel h3, .secure-panel h4,
+.account-security-panel h1, .account-security-panel h2, .account-security-panel h3, .account-security-panel h4 {
   color: #F3E7DB;
 }
 
@@ -772,6 +835,29 @@ input:focus, select:focus, textarea:focus {
   background: var(--color-bg-secondary);
   border: 1px solid var(--color-primary-sage);
   color: #33471D;
+}
+
+.fade-in-up {
+  animation: fadeInUp var(--duration-page-entry) var(--transition-ease-slow) both;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 @media (max-width: 720px) {

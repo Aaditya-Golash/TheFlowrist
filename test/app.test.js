@@ -13,6 +13,7 @@ const { createSupabaseAuthAdapter } = require('../lib/auth/supabaseAuth');
 const { buildReadiness, validateProductionEnvironment } = require('../lib/env-check');
 const { resetAllRateLimiters } = require('../lib/rate-limiter');
 const { assertCustomerOwnsRecipient, assertCustomerOwnsMilestone, assertCustomerOwnsOrder } = require('../lib/ownership');
+const { estimatePlatformProfitCents } = require('../lib/pricing');
 const {
   calculatePlannedChargeDate,
   createScheduledOrderFromMilestone,
@@ -156,8 +157,10 @@ test('root endpoint returns service info', async () => {
   resetData();
   const response = await request('/');
   assert.equal(response.status, 200);
-  assert.match(response.text, /TheFlowrist/i);
+  assert.match(response.text, /TheFlowerist/i);
   assert.match(response.text, /\/public\/styles\.css/);
+  assert.match(response.text, /fonts\.googleapis\.com/);
+  assert.match(response.text, /Cormorant\+Garamond/);
 });
 
 test('landing page includes key trust copy', async () => {
@@ -172,13 +175,44 @@ test('landing page includes key trust copy', async () => {
   assert.match(response.text, /reminder/i);
 });
 
+test('landing page shows current pricing tiers', async () => {
+  resetData();
+  const response = await request('/');
+  assert.equal(response.status, 200);
+  assert.match(response.text, /\$145/);
+  assert.match(response.text, /\$195/);
+  assert.match(response.text, /\$275/);
+  assert.doesNotMatch(response.text, /\$75|\$120|\$200/);
+});
+
 test('global CSS is served from public assets', async () => {
   resetData();
   const response = await request('/public/styles.css');
   assert.equal(response.status, 200);
   assert.match(response.headers.get('content-type') || '', /text\/css/);
   assert.match(response.text, /--font-display/);
+  assert.match(response.text, /--font-body/);
+  assert.match(response.text, /--fs-display: clamp\(3rem, calc\(2\.5rem \+ 3vw\), 4\.75rem\)/);
+  assert.match(response.text, /--fs-h1: clamp\(2\.25rem, calc\(1\.8rem \+ 2\.25vw\), 3\.05rem\)/);
+  assert.match(response.text, /--fs-h2: clamp\(1\.75rem, calc\(1\.45rem \+ 1\.5vw\), 2\.44rem\)/);
+  assert.match(response.text, /--fs-h3: clamp\(1\.35rem, calc\(1\.15rem \+ 1vw\), 1\.95rem\)/);
+  assert.match(response.text, /--fs-body: clamp\(1rem, calc\(0\.95rem \+ 0\.25vw\), 1\.125rem\)/);
+  assert.match(response.text, /--fs-small: clamp\(0\.81rem, calc\(0\.78rem \+ 0\.15vw\), 0\.9rem\)/);
+  assert.match(response.text, /--fs-caption: clamp\(0\.68rem, calc\(0\.65rem \+ 0\.1vw\), 0\.75rem\)/);
+  assert.match(response.text, /--color-bg-primary: #F3E7DB/);
+  assert.match(response.text, /--color-bg-secondary: #EDEAE0/);
+  assert.match(response.text, /--color-border-parchment: #DCD7D3/);
+  assert.match(response.text, /--color-primary-olive: #556B2F/);
+  assert.match(response.text, /--color-primary-sage: #9CAF88/);
+  assert.match(response.text, /--color-text-espresso: #261311/);
+  assert.match(response.text, /--color-text-charcoal: #3C3A34/);
+  assert.match(response.text, /--color-onyx: #0A0A0A/);
+  assert.match(response.text, /--color-metal-brass: #CCBD77/);
+  assert.match(response.text, /--color-danger: #8B3A3A/);
+  assert.match(response.text, /max-width: 65ch/);
+  assert.match(response.text, /prefers-reduced-motion/);
   assert.match(response.text, /\.vault-panel/);
+  assert.doesNotMatch(response.text, /Ãƒ|Ã‚|Ã¢|Ã¯Â¿Â½|ï¿½/);
 });
 
 test('payment page includes no-charge-today copy', async () => {
@@ -187,7 +221,9 @@ test('payment page includes no-charge-today copy', async () => {
   assert.equal(response.status, 200);
   assert.match(response.text, /not charged today/i);
   assert.match(response.text, /remind you before/i);
-  assert.match(response.text, /pause or cancel/i);
+  assert.match(response.text, /pause before the cutoff/i);
+  assert.match(response.text, /Payment capture is not enabled in this local pilot build/i);
+  assert.match(response.text, /vault-panel/);
 });
 
 test('dashboard includes add important date CTA', async () => {
@@ -214,9 +250,46 @@ test('scheduled order dates calculate correctly', () => {
   assert.equal(calculatePlannedChargeDate('2026-08-15', 5), '2026-08-10');
 });
 
-test('pricing helper returns correct tier price plus delivery fee', () => {
+test('pricing helper returns customer-facing tier price', () => {
   resetData();
-  assert.equal(calculateEstimatedPrice('premium', 1200), 20700);
+  assert.equal(calculateEstimatedPrice('premium', 1200), 19500);
+});
+
+test('rendered core pages do not contain mojibake', async () => {
+  resetData();
+  const pages = ['/', '/login', '/dashboard', '/recipients/new', '/milestones/new', '/account', '/account/payment-consent', '/admin/login'];
+  for (const page of pages) {
+    const response = await request(page);
+    assert.equal(response.status, 200);
+    assert.doesNotMatch(response.text, /Ã|Â|â|ï¿½|�/);
+  }
+});
+
+test('rendered active UI does not show historical pricing tiers', async () => {
+  resetData();
+  const pages = ['/', '/dashboard', '/recipients/new', '/milestones/new', '/account', '/account/payment-consent', '/admin/login'];
+  for (const page of pages) {
+    const response = await request(page);
+    assert.equal(response.status, 200);
+    assert.doesNotMatch(response.text, /\$75|\$120|\$200/);
+  }
+});
+
+test('milestone form renders aesthetic mood cards', async () => {
+  resetData();
+  const response = await request('/milestones/new');
+  assert.equal(response.status, 200);
+  assert.match(response.text, /Pastel &amp; Eucalyptus|Pastel & Eucalyptus/);
+  assert.match(response.text, /Sculptural &amp; Clean|Sculptural & Clean/);
+  assert.match(response.text, /Rich &amp; Botanical|Rich & Botanical/);
+});
+
+test('pricing profit remains positive across florist rebate assumptions', () => {
+  ['classic', 'premium', 'signature'].forEach((tierKey) => {
+    [0.20, 0.25, 0.30].forEach((rebateRate) => {
+      assert.ok(estimatePlatformProfitCents(tierKey, rebateRate) > 0);
+    });
+  });
 });
 
 test('out-of-zone postal code is flagged', () => {
@@ -249,7 +322,7 @@ test('scheduled orders are created from milestones with charge date and pricing'
 
   assert.equal(order.status, 'scheduled');
   assert.equal(order.plannedChargeDate, '2026-08-10');
-  assert.equal(order.estimatedCustomerPriceCents, 28700);
+  assert.equal(order.estimatedCustomerPriceCents, 27500);
 });
 
 test('postal code normalization and annual occurrence helpers work', () => {
@@ -917,7 +990,7 @@ test('account page only shows the current customer own payment consent', async (
   try {
     const response = await request('/account');
     assert.equal(response.status, 200);
-    assert.match(response.text, /Active and ready for concierge charging/);
+    assert.match(response.text, /Active for future concierge charges/);
   } finally {
     setStorageAdapter(null);
     resetAuthAdapter();
