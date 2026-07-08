@@ -6,3 +6,4 @@ npm-debug.log*
 logs/
 coverage/
 .DS_Store
+data/app-data.json

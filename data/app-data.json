@@ -32,7 +32,7 @@
       "addressLine2": "",
       "city": "Toronto",
       "province": "ON",
-      "postalCode": "M5H 3T1",
+      "postalCode": "M5V 2T6",
       "deliveryInstructions": "Ring buzzer 2",
       "createdAt": "2026-01-03T00:00:00.000Z",
       "updatedAt": "2026-01-03T00:00:00.000Z"
@@ -106,15 +106,17 @@
       "deliveryFeeCents": 1200,
       "status": "scheduled",
       "floristPartnerId": "florist-1",
-      "internalNotes": "Need seasonal arrangement",
-      "customerNotes": "Please keep it elegant",
-      "generatedCardMessage": "A thoughtful note for warm.",
+      "internalNotes": "",
+      "customerNotes": "",
+      "generatedCardMessage": "",
       "photoProofUrl": "",
       "deliveredAt": null,
-      "supportMinutes": 15,
+      "supportMinutes": 0,
       "refundAmountCents": null,
       "createdAt": "2026-01-15T00:00:00.000Z",
-      "updatedAt": "2026-01-15T00:00:00.000Z"
+      "updatedAt": "2026-07-08T05:51:47.382Z",
+      "cancellationReason": "",
+      "issueNotes": ""
     }
   ],
   "floristPartners": [
@@ -168,7 +170,7 @@
       "stripeCustomerId": "",
       "stripePaymentMethodId": "",
       "consentTextVersion": "v1",
-      "consentTextSnapshot": "By saving your card, you authorize The Flowerist...",
+      "consentTextSnapshot": "By saving your payment consent, you authorize The Flowerist to charge your payment method for flower orders you schedule, including delivery and applicable taxes, when those milestone orders are prepared. We will remind you before scheduled charges. You can pause or cancel future scheduled orders from your account before the cutoff.",
       "consentedAt": "2026-01-10T00:00:00.000Z",
       "ipAddress": "127.0.0.1",
       "userAgent": "demo",
@@ -183,6 +185,14 @@
       "message": "Order scheduled for concierge review",
       "actorType": "system",
       "createdAt": "2026-01-15T00:00:00.000Z"
+    },
+    {
+      "id": "event-1783489907382",
+      "orderId": "order-1",
+      "type": "status_change",
+      "message": "Updated order fields; status scheduled",
+      "actorType": "admin",
+      "createdAt": "2026-07-08T05:51:47.382Z"
     }
   ],
   "feedback": []
