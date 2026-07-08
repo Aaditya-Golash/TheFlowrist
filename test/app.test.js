@@ -35,6 +35,7 @@ const request = async (path, { method = 'GET', body, headers } = {}) => {
 const resetData = () => {
   process.env.NODE_ENV = 'test';
   process.env.ADMIN_EMAILS = 'admin@example.com';
+  process.env.INTERNAL_API_SECRET = 'test-secret';
   writeSeedData();
 };
 
@@ -193,4 +194,66 @@ test('admin can assign florist', async () => {
   const nextState = require('../lib/store').getState();
   const updatedOrder = nextState.orders.find((entry) => entry.id === order.id);
   assert.equal(updatedOrder.floristPartnerId, florist.id);
+});
+
+test('json storage adapter still works', () => {
+  resetData();
+  const adapter = require('../lib/store').getStorageAdapter();
+  const state = adapter.getState();
+  assert.ok(state.orders.length >= 1);
+  assert.equal(adapter.listScheduledOrders().length, state.orders.length);
+});
+
+test('internal endpoints reject missing secret', async () => {
+  resetData();
+  const response = await request('/internal/orders/upcoming');
+  assert.equal(response.status, 401);
+});
+
+test('internal endpoints accept valid secret and return JSON', async () => {
+  resetData();
+  const response = await request('/internal/orders/upcoming', {
+    headers: { 'x-internal-api-secret': 'test-secret' },
+  });
+  assert.equal(response.status, 200);
+  const payload = JSON.parse(response.text);
+  assert.ok(Array.isArray(payload.orders));
+});
+
+test('internal event endpoint creates an order event log', async () => {
+  resetData();
+  const state = require('../lib/store').getState();
+  const order = state.orders[0];
+  const response = await request(`/internal/orders/${order.id}/event`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      'x-internal-api-secret': 'test-secret',
+    },
+    body: 'message=Reminder queued',
+  });
+  assert.equal(response.status, 200);
+  const nextState = require('../lib/store').getState();
+  const createdEvent = nextState.orderEvents.find((entry) => entry.orderId === order.id && entry.message === 'Reminder queued');
+  assert.ok(createdEvent);
+});
+
+test('internal status endpoint updates order status and logs it', async () => {
+  resetData();
+  const state = require('../lib/store').getState();
+  const order = state.orders[0];
+  const response = await request(`/internal/orders/${order.id}/status`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      'x-internal-api-secret': 'test-secret',
+    },
+    body: 'status=pending_charge',
+  });
+  assert.equal(response.status, 200);
+  const nextState = require('../lib/store').getState();
+  const updatedOrder = nextState.orders.find((entry) => entry.id === order.id);
+  const createdEvent = nextState.orderEvents.find((entry) => entry.orderId === order.id && entry.message.includes('pending_charge'));
+  assert.equal(updatedOrder.status, 'pending_charge');
+  assert.ok(createdEvent);
 });
