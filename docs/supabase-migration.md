@@ -56,7 +56,7 @@
 3. Preserve existing IDs to avoid breaking milestones and orders.
 4. Keep the JSON adapter active while the migration is tested in staging.
 
-## Future environment variables
+## Required environment variables
 
 - SUPABASE_URL
 - SUPABASE_SERVICE_ROLE_KEY

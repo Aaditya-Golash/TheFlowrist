@@ -23,7 +23,7 @@ TheFlowrist is a concierge-first MVP for milestone flower gifting. The current i
 - The app now uses a storage adapter boundary so the rest of the app does not depend directly on file-system details.
 - The default adapter is JSON-backed and still powers the current pilot experience.
 - An optional Supabase adapter is available when the server is started with `STORAGE_BACKEND=supabase`.
-- The server-side adapter uses the official Supabase client and expects `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
+- The server-side adapter uses the official Supabase JavaScript client and expects `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
 - The SQL schema lives in [supabase/schema.sql](supabase/schema.sql) and the migration helper is [scripts/migrate-json-to-supabase.js](scripts/migrate-json-to-supabase.js).
 
 ## Run locally
