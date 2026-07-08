@@ -1,12 +1,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fs = require('node:fs');
+const { execFileSync } = require('node:child_process');
 
 const app = require('../server');
 const { writeSeedData } = require('../lib/seed');
 const { resolveStorageAdapter } = require('../lib/store');
 const { createSupabaseStore } = require('../lib/supabaseStore');
-const { resolveAuthBackend, resetAuthAdapter } = require('../lib/auth');
+const { resolveAuthBackend, resetAuthAdapter, setAuthAdapter } = require('../lib/auth');
 const { createSupabaseAuthAdapter } = require('../lib/auth/supabaseAuth');
 const { buildReadiness, validateProductionEnvironment } = require('../lib/env-check');
 const {
@@ -58,7 +60,8 @@ test('health endpoint returns ok', async () => {
   resetData();
   const response = await request('/health');
   assert.equal(response.status, 200);
-  assert.match(response.text, /ok/i);
+  assert.deepEqual(JSON.parse(response.text), { status: 'ok' });
+  assert.doesNotMatch(response.text, /environment|production|development|test/i);
 });
 
 test('root endpoint returns service info', async () => {
@@ -308,6 +311,26 @@ test('internal endpoints reject missing secret', async () => {
   resetData();
   const response = await request('/internal/orders/upcoming');
   assert.equal(response.status, 401);
+  assert.match(response.headers.get('content-type') || '', /application\/json/);
+  assert.deepEqual(JSON.parse(response.text), { error: 'unauthorized' });
+  assert.doesNotMatch(response.text, /stack|SUPABASE|INTERNAL_API_SECRET|test-secret/i);
+});
+
+test('internal endpoints reject wrong secret and fail closed when unconfigured', async () => {
+  resetData();
+  const wrongSecretResponse = await request('/internal/orders/needing-reminder', {
+    headers: { 'x-internal-api-secret': 'wrong-secret' },
+  });
+  assert.equal(wrongSecretResponse.status, 401);
+  assert.match(wrongSecretResponse.headers.get('content-type') || '', /application\/json/);
+  assert.deepEqual(JSON.parse(wrongSecretResponse.text), { error: 'unauthorized' });
+
+  delete process.env.INTERNAL_API_SECRET;
+  const unconfiguredResponse = await request('/internal/orders/upcoming', {
+    headers: { 'x-internal-api-secret': 'anything' },
+  });
+  assert.equal(unconfiguredResponse.status, 401);
+  assert.deepEqual(JSON.parse(unconfiguredResponse.text), { error: 'unauthorized' });
 });
 
 test('internal endpoints accept valid secret and return JSON', async () => {
@@ -316,6 +339,7 @@ test('internal endpoints accept valid secret and return JSON', async () => {
     headers: { 'x-internal-api-secret': 'test-secret' },
   });
   assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type') || '', /application\/json/);
   const payload = JSON.parse(response.text);
   assert.ok(Array.isArray(payload.orders));
 });
@@ -398,6 +422,7 @@ test('supabase key fallback logic works', () => {
 
 test('scripts do not log secret values', async () => {
   const { runMigration } = require('../scripts/migrate-json-to-supabase');
+  const { runSmoke } = require('../scripts/smoke-supabase');
   const lines = [];
   const result = await runMigration({
     env: {
@@ -410,6 +435,31 @@ test('scripts do not log secret values', async () => {
   });
   assert.equal(result.dryRun, true);
   assert.equal(lines.join('\n').includes('super-secret-value'), false);
+
+  const smokeLines = [];
+  const chain = {
+    select: () => Promise.resolve({ data: [{ id: 'row-1', status: 'pending_charge', active: false }], error: null }),
+    update: () => chain,
+    eq: () => chain,
+    then: (resolve, reject) => Promise.resolve({ data: [{ id: 'row-1', status: 'pending_charge', active: false }], error: null }).then(resolve, reject),
+  };
+  await runSmoke({
+    env: {
+      SUPABASE_URL: 'https://example.supabase.co',
+      SUPABASE_SERVICE_ROLE_KEY: 'super-secret-value',
+    },
+    logger: (message) => smokeLines.push(message),
+    createClient: () => ({
+      from: () => ({
+        upsert: () => chain,
+        update: () => chain,
+        select: () => chain,
+      }),
+    }),
+  });
+  const smokeOutput = smokeLines.join('\n');
+  assert.equal(smokeOutput.includes('super-secret-value'), false);
+  assert.equal(smokeOutput.includes('pilot-smoke-test@example.com'), false);
 });
 
 test('AUTH_BACKEND defaults to pilot', () => {
@@ -435,6 +485,8 @@ test('pilot login sets a customer session cookie', async () => {
   assert.equal(response.status, 302);
   const cookies = getSetCookies(response.headers).join('; ');
   assert.match(cookies, /pilotCustomerEmail=/);
+  assert.match(cookies, /HttpOnly/);
+  assert.match(cookies, /SameSite=Lax/);
 });
 
 test('logout clears session cookie', async () => {
@@ -450,6 +502,18 @@ test('admin guard still works in pilot mode', async () => {
   const response = await request('/admin', { headers: { cookie: 'adminEmail=someone-else@example.com' } });
   assert.equal(response.status, 302);
   assert.match(response.headers.get('location') || '', /\/admin\/login/);
+});
+
+test('x-admin-email header is ignored outside test mode', async () => {
+  resetData();
+  process.env.NODE_ENV = 'development';
+  try {
+    const response = await request('/admin', { headers: { 'x-admin-email': 'admin@example.com' } });
+    assert.equal(response.status, 302);
+    assert.match(response.headers.get('location') || '', /\/admin\/login/);
+  } finally {
+    resetData();
+  }
 });
 
 test('non-admin email is rejected by admin guard', async () => {
@@ -493,6 +557,23 @@ test('customer-protected routes redirect to login in Supabase mode when unauthen
   }
 });
 
+test('account and payment routes redirect to login in Supabase mode when unauthenticated', async () => {
+  resetData();
+  process.env.AUTH_BACKEND = 'supabase';
+  process.env.SUPABASE_URL = 'https://example.supabase.co';
+  process.env.SUPABASE_ANON_KEY = 'anon-key';
+  resetAuthAdapter();
+  try {
+    for (const route of ['/account', '/account/payment-consent']) {
+      const response = await request(route);
+      assert.equal(response.status, 302);
+      assert.match(response.headers.get('location') || '', /\/login/);
+    }
+  } finally {
+    resetData();
+  }
+});
+
 test('/ready returns JSON', async () => {
   resetData();
   const response = await request('/ready');
@@ -500,6 +581,11 @@ test('/ready returns JSON', async () => {
   const payload = JSON.parse(response.text);
   assert.equal(typeof payload.ready, 'boolean');
   assert.ok(payload.checks);
+  assert.doesNotMatch(response.text, /test-secret|service-role|anon-key|sbAccessToken|sbRefreshToken/i);
+  assert.equal(payload.checks.storageBackend.backend, 'json');
+  assert.equal(payload.checks.authBackend.backend, 'pilot');
+  assert.equal(payload.checks.internalApiSecret.present, true);
+  assert.equal(payload.checks.adminEmails.present, true);
 });
 
 test('readiness check reflects invalid backends', () => {
@@ -553,4 +639,59 @@ test('cookies are marked secure in production', async () => {
   } finally {
     process.env.NODE_ENV = 'test';
   }
+});
+
+test('Supabase auth cookies use safe flags and do not store service credentials', () => {
+  resetData();
+  process.env.NODE_ENV = 'production';
+  const headers = {};
+  const res = { setHeader(name, value) { headers[name] = value; } };
+  setAuthAdapter({
+    createSessionCookies: require('../lib/auth/supabaseAuth').createSupabaseAuthAdapter({
+      SUPABASE_URL: 'https://example.supabase.co',
+      SUPABASE_ANON_KEY: 'anon-key',
+    }).createSessionCookies,
+  });
+  const adapter = require('../lib/auth').getAuthAdapter();
+  adapter.createSessionCookies(res, {
+    access_token: 'access-token-value',
+    refresh_token: 'refresh-token-value',
+    expires_in: 3600,
+  });
+  const cookies = headers['Set-Cookie'].join('; ');
+  assert.match(cookies, /sbAccessToken=access-token-value/);
+  assert.match(cookies, /sbRefreshToken=refresh-token-value/);
+  assert.match(cookies, /HttpOnly/);
+  assert.match(cookies, /SameSite=Lax/);
+  assert.match(cookies, /Secure/);
+  assert.doesNotMatch(cookies, /service-role|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_SECRET_KEY|INTERNAL_API_SECRET/i);
+  resetData();
+});
+
+test('committed docs and examples do not contain obvious real secrets', () => {
+  resetData();
+  const trackedFiles = execFileSync('git', ['ls-files'], { cwd: path.join(__dirname, '..'), encoding: 'utf8' })
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .filter((filePath) => !filePath.endsWith('package-lock.json'));
+  const secretPatterns = [
+    /eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/,
+    /sb_secret_[A-Za-z0-9_-]{20,}/,
+    /sb_publishable_[A-Za-z0-9_-]{20,}/,
+    /sk_live_[A-Za-z0-9_-]+/,
+    /whsec_[A-Za-z0-9_-]+/,
+    /https:\/\/[a-z0-9]{20}\.supabase\.co/i,
+  ];
+  const offenders = [];
+  for (const filePath of trackedFiles) {
+    const absolutePath = path.join(__dirname, '..', filePath);
+    const content = fs.readFileSync(absolutePath, 'utf8');
+    for (const pattern of secretPatterns) {
+      if (pattern.test(content)) {
+        offenders.push(filePath);
+        break;
+      }
+    }
+  }
+  assert.deepEqual(offenders, []);
 });

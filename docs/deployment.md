@@ -66,7 +66,7 @@ After deploying:
 
 ```bash
 curl https://your-pilot-domain/health
-# {"status":"ok","environment":"production"}
+# {"status":"ok"}
 
 curl https://your-pilot-domain/ready
 # {"ready":true,"environment":"production","checks":{...}}
