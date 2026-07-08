@@ -73,10 +73,12 @@ async function main() {
   }, null, 2));
 }
 
-main().catch((error) => {
-  console.error(error.message || error);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error.message || error);
+    process.exitCode = 1;
+  });
+}
 
 module.exports = {
   validateSupabaseEnvironment,

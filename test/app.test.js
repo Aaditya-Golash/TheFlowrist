@@ -39,6 +39,7 @@ const resetData = () => {
   process.env.NODE_ENV = 'test';
   process.env.ADMIN_EMAILS = 'admin@example.com';
   process.env.INTERNAL_API_SECRET = 'test-secret';
+  process.env.STORAGE_BACKEND = 'json';
   writeSeedData();
 };
 

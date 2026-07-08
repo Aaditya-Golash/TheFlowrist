@@ -28,9 +28,33 @@ function parseArgs(argv) {
   };
 }
 
-async function runMigration({ env = process.env, dryRun = false, dataFilePath = path.join(__dirname, '..', 'data', 'app-data.json'), createClientImpl = createClient, logger = console.log } = {}) {
-  const { supabaseUrl, serviceRoleKey } = validateSupabaseEnvironment(env);
+function countRows(state) {
+  return {
+    customers: (state.users || []).length,
+    recipients: (state.recipients || []).length,
+    milestones: (state.milestones || []).length,
+    scheduledOrders: (state.orders || []).length,
+    florists: (state.floristPartners || []).length,
+    zones: (state.serviceZones || []).length,
+    consents: (state.paymentConsents || []).length,
+    logs: (state.orderEvents || []).length,
+    feedback: (state.feedback || []).length,
+  };
+}
+
+async function runMigration({ env = process.env, dryRun = false, dataFilePath = path.join(__dirname, '..', 'data', 'app-data.json'), createClient: createClientImpl = createClient, logger = console.log } = {}) {
   const state = readJsonState(dataFilePath);
+
+  if (dryRun) {
+    const summary = countRows(state);
+    logger(JSON.stringify(summary, null, 2));
+    return { dryRun: true, summary, dataFilePath };
+  }
+
+  const { supabaseUrl, serviceRoleKey } = validateSupabaseEnvironment(env);
+  const supabase = createClientImpl(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
   const summary = { customers: 0, recipients: 0, milestones: 0, scheduledOrders: 0, florists: 0, zones: 0, consents: 0, logs: 0, feedback: 0 };
   const rowsByTable = [
     ['customers', (state.users || []).map((customer) => ({ id: normalizeId(customer.id), name: customer.name || '', email: customer.email || null, phone: customer.phone || null, marketing_email_consent: Boolean(customer.marketingEmailConsent), marketing_sms_consent: Boolean(customer.marketingSmsConsent), created_at: customer.createdAt || new Date().toISOString(), updated_at: customer.updatedAt || new Date().toISOString() }))],
