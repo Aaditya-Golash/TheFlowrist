@@ -1,0 +1,16 @@
+{
+  "name": "theflowrist",
+  "version": "1.0.0",
+  "description": "Production-ready starter for TheFlowrist",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
