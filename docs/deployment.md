@@ -38,9 +38,9 @@ At startup, if `NODE_ENV=production`, the server validates these and refuses to 
 ## Supabase setup checklist
 
 1. Create a Supabase project (or use an existing one for the pilot).
-2. Run the schema: apply [supabase/schema.sql](../supabase/schema.sql) in the Supabase SQL editor.
+2. Run the schema: apply [supabase/schema.sql](../supabase/schema.sql) in the Supabase SQL editor. This creates every table, enables Row Level Security with ownership policies on the customer-owned tables, and adds the `customers.auth_user_id` column used by those policies — see [docs/security.md](security.md) for what it does and why. Every statement is idempotent, so it's safe to re-run against a project that already has an older version of this schema.
 3. Copy `SUPABASE_URL`, the **anon** key, and the **service role** key into your deployment's environment variables. Never commit these — `.env` and `.env.example` stay placeholder-only (see `.gitignore`).
-4. Create private pilot users in Authentication → Users (see [docs/auth.md](auth.md) — there is no public sign-up).
+4. Create private pilot users in Authentication → Users (see [docs/auth.md](auth.md) — there is no public sign-up). `auth_user_id` is backfilled automatically on each customer's first Supabase Auth login.
 5. Add each admin's email to `ADMIN_EMAILS`.
 
 ## Running the migration
@@ -107,38 +107,23 @@ This runs `npm test` (fully offline) followed by `npm run check:supabase` (requi
 - n8n, MCP, Playwright, Shopify — intentionally absent from this codebase.
 - Real Stripe charging — payment consent is recorded, but no charge is ever placed.
 - Public customer sign-up — pilot users are created manually in Supabase.
-- Row-level security policies — see the blocking item below.
+- Row-level security policies — defined in `supabase/schema.sql`, see below.
 
-## 🛑 Before inviting real users — confirmed blocker, do not skip
+## Applying RLS to an already-deployed project
 
-**Row Level Security is disabled on all 9 tables in the live Supabase project** (`customers`, `recipients`, `milestones`, `scheduled_orders`, `florist_partners`, `service_zones`, `payment_consents`, `order_event_logs`, `feedback`). Confirmed directly via the Supabase advisor scan (`get_advisors`, security lint `rls_disabled_in_public`, `ERROR` level) on 2026-07-08. This means anyone holding `SUPABASE_ANON_KEY` — a key meant to be safe for client-side/public use, and one this app already relies on for Supabase Auth — can read or write every row in every table, including `customers` and `payment_consents`, directly against PostgREST, bypassing the app entirely.
+If you deployed before RLS policies existed in `supabase/schema.sql` (e.g. the RLS-disabled state flagged in [issue #1](https://github.com/Aaditya-Golash/TheFlowrist/issues/1)), **re-run the full `supabase/schema.sql` file** against your project's SQL editor. Every statement is idempotent (`create table if not exists`, `add column if not exists`, `drop policy if exists` before `create policy`) — safe to run again on a project that already has tables and data. This enables RLS and adds ownership policies on `customers`, `recipients`, `milestones`, `scheduled_orders`, `payment_consents`, and `feedback`, and adds the `customers.auth_user_id` column those policies key off of. See [docs/security.md](security.md) for the full model, including which tables are intentionally left without RLS and why.
 
-This has to be resolved (or explicitly accepted with a documented reason) before any real pilot customer's data goes into this project. Two ways to close it:
-
-1. **Enable RLS with real policies** (recommended) — e.g. customers can only select/update their own row, recipients/milestones/orders scoped to the owning customer, admin access via the service-role key (which bypasses RLS, so the server keeps working). Ask for the policy SQL to be drafted against `lib/auth/supabaseAuth.js`'s customer-mapping logic when ready to do this.
-2. **Enable RLS with zero policies as a temporary lockdown** — blocks all anon/authenticated access outright; only the service-role key (used server-side) can read/write. Breaks nothing in this app today since all current requests go through the server, but blocks any future direct-from-browser Supabase usage until policies are added:
-   ```sql
-   ALTER TABLE public.customers ENABLE ROW LEVEL SECURITY;
-   ALTER TABLE public.recipients ENABLE ROW LEVEL SECURITY;
-   ALTER TABLE public.milestones ENABLE ROW LEVEL SECURITY;
-   ALTER TABLE public.scheduled_orders ENABLE ROW LEVEL SECURITY;
-   ALTER TABLE public.florist_partners ENABLE ROW LEVEL SECURITY;
-   ALTER TABLE public.service_zones ENABLE ROW LEVEL SECURITY;
-   ALTER TABLE public.payment_consents ENABLE ROW LEVEL SECURITY;
-   ALTER TABLE public.order_event_logs ENABLE ROW LEVEL SECURITY;
-   ALTER TABLE public.feedback ENABLE ROW LEVEL SECURITY;
-   ```
-
-Re-run the advisor check before launch to confirm this is actually resolved, not just remembered:
+After re-running the schema, re-check the advisor scan to confirm it's actually resolved:
 ```
 get_advisors(project_id, type="security")   # via the Supabase MCP connection
 ```
 
+`auth_user_id` backfills automatically the next time each existing customer signs in via Supabase Auth — no manual data migration needed, but until a customer's first post-upgrade login, their row won't yet satisfy the new policies from an anon/authenticated-key perspective (irrelevant to the app itself, since it uses the service-role key, which bypasses RLS).
+
 ## Remaining risks before inviting real users
 
-- No RLS policies yet — the service role key has full table access; a compromised server process would have full database access. Acceptable for a small trusted pilot, not for scale.
+- **Rate limiting is in-memory and single-process** ([lib/rate-limiter.js](../lib/rate-limiter.js)) — fine for one small pilot instance, resets on restart, and doesn't share state across multiple instances behind a load balancer. Not a substitute for a real distributed rate limiter at scale.
 - No password reset/magic-link UI — a locked-out user needs manual help via the Supabase dashboard.
-- No rate limiting on `/login` or `/admin/login` — a small pilot is low-risk, but this should be addressed before any wider rollout.
 - No automated backups verification — confirm Supabase's backup settings match your risk tolerance before go-live.
-- Dashboard/account data is not strictly scoped per customer (a long-standing MVP simplification, unchanged by this work) — fine for a single-tenant-feeling pilot with a handful of trusted users, not fine at scale.
-- **Storage adapter sync/async mismatch (pre-existing, high priority to verify)**: route handlers call `getState()`/`setState()` without `await`, which is correct for the JSON backend (synchronous) but not for the Supabase backend, whose `getState()` returns a Promise. If that Promise rejects (e.g. a missing table, a network blip) with nothing awaiting it, it surfaces as an **unhandled promise rejection that crashes the whole Node process**, not a contained per-request error. This predates the auth/deployment work in this document and was not introduced by it, but it means `STORAGE_BACKEND=supabase` has not been battle-tested against real traffic the way `STORAGE_BACKEND=json` has via the test suite (which only exercises the JSON backend end-to-end). Before inviting real users with `STORAGE_BACKEND=supabase`: apply `supabase/schema.sql` fully, manually click through every route once against the real project, and consider running the process under a supervisor that auto-restarts on crash (e.g. `pm2`, systemd) as a safety net while this gets fixed properly.
+- No customer-facing "view order" page yet, so the `assertCustomerOwnsOrder` ownership check has no current call site — add real enforcement when that view ships.
+- RLS policies are written and covered by the schema file, but have not yet been verified against a live Supabase project with real Supabase Auth sessions (only unit-testable logic — the ownership checks in `lib/ownership.js` — has automated coverage). Manually verify by signing in as two different real pilot users and confirming neither can see the other's data, before broader rollout.

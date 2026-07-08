@@ -6,11 +6,13 @@ const { execFileSync } = require('node:child_process');
 
 const app = require('../server');
 const { writeSeedData } = require('../lib/seed');
-const { resolveStorageAdapter } = require('../lib/store');
+const { resolveStorageAdapter, setStorageAdapter, getStorageAdapter } = require('../lib/store');
 const { createSupabaseStore } = require('../lib/supabaseStore');
 const { resolveAuthBackend, resetAuthAdapter, setAuthAdapter } = require('../lib/auth');
 const { createSupabaseAuthAdapter } = require('../lib/auth/supabaseAuth');
 const { buildReadiness, validateProductionEnvironment } = require('../lib/env-check');
+const { resetAllRateLimiters } = require('../lib/rate-limiter');
+const { assertCustomerOwnsRecipient, assertCustomerOwnsMilestone, assertCustomerOwnsOrder } = require('../lib/ownership');
 const {
   calculatePlannedChargeDate,
   createScheduledOrderFromMilestone,
@@ -49,7 +51,93 @@ const resetData = () => {
   delete process.env.SUPABASE_URL;
   delete process.env.SUPABASE_ANON_KEY;
   resetAuthAdapter();
+  setStorageAdapter(null);
+  resetAllRateLimiters();
   writeSeedData();
+};
+
+function createFakeAsyncStore(seed) {
+  const state = JSON.parse(JSON.stringify(seed));
+  const tick = (value) => new Promise((resolve) => setTimeout(() => resolve(value), 0));
+  const findAndUpdate = (list, id, changes) => {
+    const record = list.find((entry) => entry.id === id);
+    if (!record) {
+      return null;
+    }
+    Object.assign(record, changes, { updatedAt: new Date().toISOString() });
+    return record;
+  };
+  return {
+    async getState() { return tick(JSON.parse(JSON.stringify(state))); },
+    async saveState() { throw new Error('saveState is not implemented for the fake async backend'); },
+    async listCustomers() { return tick(state.users); },
+    async getCustomerById(id) { return tick(state.users.find((entry) => entry.id === id) || null); },
+    async createCustomer(customer) { state.users.push(customer); return tick(customer); },
+    async updateCustomer(id, changes) { return tick(findAndUpdate(state.users, id, changes)); },
+    async listRecipients() { return tick(state.recipients); },
+    async getRecipientById(id) { return tick(state.recipients.find((entry) => entry.id === id) || null); },
+    async createRecipient(recipient) { state.recipients.push(recipient); return tick(recipient); },
+    async updateRecipient(id, changes) { return tick(findAndUpdate(state.recipients, id, changes)); },
+    async listMilestones() { return tick(state.milestones); },
+    async getMilestoneById(id) { return tick(state.milestones.find((entry) => entry.id === id) || null); },
+    async createMilestone(milestone) { state.milestones.push(milestone); return tick(milestone); },
+    async updateMilestone(id, changes) { return tick(findAndUpdate(state.milestones, id, changes)); },
+    async listScheduledOrders() { return tick(state.orders); },
+    async getScheduledOrderById(id) { return tick(state.orders.find((entry) => entry.id === id) || null); },
+    async createScheduledOrder(order) { state.orders.push(order); return tick(order); },
+    async updateScheduledOrder(id, changes) { return tick(findAndUpdate(state.orders, id, changes)); },
+    async createOrderEventLog(event) { state.orderEvents.push(event); return tick(event); },
+    async listOrderEventLogs(orderId) { return tick(state.orderEvents.filter((entry) => entry.orderId === orderId)); },
+    async listPaymentConsents() { return tick(state.paymentConsents); },
+    async createPaymentConsent(consent) { state.paymentConsents.push(consent); return tick(consent); },
+    async revokePaymentConsent(id) { return tick(findAndUpdate(state.paymentConsents, id, { active: false })); },
+    async listFloristPartners() { return tick(state.floristPartners); },
+    async createFloristPartner(floristPartner) { state.floristPartners.push(floristPartner); return tick(floristPartner); },
+    async updateFloristPartner(id, changes) { return tick(findAndUpdate(state.floristPartners, id, changes)); },
+    async listServiceZones() { return tick(state.serviceZones); },
+    _debugState: state,
+  };
+}
+
+function createFakeAuthAdapter(customer) {
+  return {
+    backend: 'supabase',
+    async getCurrentUser() { return { email: customer.email, id: customer.id }; },
+    async requireUser() { return customer; },
+    async requireAdmin(req, res) {
+      res.writeHead(302, { Location: '/admin/login' });
+      res.end();
+      return false;
+    },
+    async signInWithEmailPassword() { return { ok: true, session: {} }; },
+    async signOut() {},
+    createSessionCookies() {},
+    clearSessionCookies() {},
+  };
+}
+
+const TWO_CUSTOMER_SEED = {
+  users: [
+    { id: 'cust-a', name: 'Ava', email: 'ava@example.com', phone: '', marketingEmailConsent: false, marketingSmsConsent: false, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' },
+    { id: 'cust-b', name: 'Ben', email: 'ben@example.com', phone: '', marketingEmailConsent: false, marketingSmsConsent: false, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' },
+  ],
+  recipients: [
+    { id: 'rec-a', userId: 'cust-a', name: 'Recipient A', relationship: 'friend', phone: '', addressLine1: '1 A St', addressLine2: '', city: 'Toronto', province: 'ON', postalCode: 'M5V 2T6', deliveryInstructions: '', createdAt: '2026-01-02T00:00:00.000Z', updatedAt: '2026-01-02T00:00:00.000Z' },
+    { id: 'rec-b', userId: 'cust-b', name: 'Recipient B', relationship: 'friend', phone: '', addressLine1: '2 B St', addressLine2: '', city: 'Toronto', province: 'ON', postalCode: 'M5V 2T6', deliveryInstructions: '', createdAt: '2026-01-02T00:00:00.000Z', updatedAt: '2026-01-02T00:00:00.000Z' },
+  ],
+  milestones: [
+    { id: 'mile-a', userId: 'cust-a', recipientId: 'rec-a', occasionType: 'birthday', occasionLabel: 'A birthday', eventDate: '2026-12-01', repeatsAnnually: true, budgetTier: 'classic', status: 'active', cardMessageTone: 'warm', stylePreferences: '', allergiesOrAvoid: '', hardNoPreferences: '', reminderDaysBefore: 7, chargeDaysBefore: 5, createdAt: '2026-01-03T00:00:00.000Z', updatedAt: '2026-01-03T00:00:00.000Z' },
+    { id: 'mile-b', userId: 'cust-b', recipientId: 'rec-b', occasionType: 'birthday', occasionLabel: 'B birthday', eventDate: '2026-12-05', repeatsAnnually: true, budgetTier: 'classic', status: 'active', cardMessageTone: 'warm', stylePreferences: '', allergiesOrAvoid: '', hardNoPreferences: '', reminderDaysBefore: 7, chargeDaysBefore: 5, createdAt: '2026-01-03T00:00:00.000Z', updatedAt: '2026-01-03T00:00:00.000Z' },
+  ],
+  orders: [],
+  floristPartners: [],
+  serviceZones: [{ id: 'zone-a', name: 'Downtown', prefixes: ['M5'], active: true, deliveryFeeCents: 1000, notes: '' }],
+  paymentConsents: [
+    { id: 'consent-a', userId: 'cust-a', stripeCustomerId: '', stripePaymentMethodId: '', consentTextVersion: 'v1', consentTextSnapshot: 'Consent A', consentedAt: '2026-01-04T00:00:00.000Z', ipAddress: '', userAgent: '', active: true },
+    { id: 'consent-b', userId: 'cust-b', stripeCustomerId: '', stripePaymentMethodId: '', consentTextVersion: 'v1', consentTextSnapshot: 'Consent B', consentedAt: '2026-01-04T00:00:00.000Z', ipAddress: '', userAgent: '', active: true },
+  ],
+  orderEvents: [],
+  feedback: [],
 };
 
 const getSetCookies = (headers) => (
@@ -285,8 +373,14 @@ test('supabase adapter exports the expected interface', () => {
     'saveState',
     'listCustomers',
     'getCustomerById',
+    'createCustomer',
+    'updateCustomer',
+    'listRecipients',
+    'getRecipientById',
     'createRecipient',
     'updateRecipient',
+    'listMilestones',
+    'getMilestoneById',
     'createMilestone',
     'updateMilestone',
     'listScheduledOrders',
@@ -295,6 +389,7 @@ test('supabase adapter exports the expected interface', () => {
     'updateScheduledOrder',
     'createOrderEventLog',
     'listOrderEventLogs',
+    'listPaymentConsents',
     'createPaymentConsent',
     'revokePaymentConsent',
     'listFloristPartners',
@@ -694,4 +789,189 @@ test('committed docs and examples do not contain obvious real secrets', () => {
     }
   }
   assert.deepEqual(offenders, []);
+});
+
+test('route handlers work correctly against a mock async storage adapter', async () => {
+  resetData();
+  const fakeStore = createFakeAsyncStore(TWO_CUSTOMER_SEED);
+  setStorageAdapter(fakeStore);
+  setAuthAdapter(createFakeAuthAdapter(TWO_CUSTOMER_SEED.users[0]));
+  try {
+    const dashboardResponse = await request('/dashboard');
+    assert.equal(dashboardResponse.status, 200);
+    assert.match(dashboardResponse.text, /Recipient A/);
+    assert.doesNotMatch(dashboardResponse.text, /Recipient B/);
+
+    const createResponse = await request('/recipients', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'name=New+Person&relationship=friend&addressLine1=1+St&city=Toronto&province=ON&postalCode=M5V2T6',
+    });
+    assert.equal(createResponse.status, 302);
+    assert.ok(fakeStore._debugState.recipients.some((entry) => entry.name === 'New Person' && entry.userId === 'cust-a'));
+  } finally {
+    setStorageAdapter(null);
+    resetAuthAdapter();
+  }
+});
+
+test('assertCustomerOwns* helpers correctly gate cross-customer access', async () => {
+  resetData();
+  const fakeStore = createFakeAsyncStore(TWO_CUSTOMER_SEED);
+  assert.equal(await assertCustomerOwnsRecipient(fakeStore, 'cust-a', 'rec-a'), true);
+  assert.equal(await assertCustomerOwnsRecipient(fakeStore, 'cust-a', 'rec-b'), false);
+  assert.equal(await assertCustomerOwnsMilestone(fakeStore, 'cust-b', 'mile-b'), true);
+  assert.equal(await assertCustomerOwnsMilestone(fakeStore, 'cust-b', 'mile-a'), false);
+  assert.equal(await assertCustomerOwnsOrder(fakeStore, 'cust-a', 'does-not-exist'), false);
+});
+
+test('customer cannot pause or cancel another customer milestone', async () => {
+  resetData();
+  const fakeStore = createFakeAsyncStore(TWO_CUSTOMER_SEED);
+  setStorageAdapter(fakeStore);
+  setAuthAdapter(createFakeAuthAdapter(TWO_CUSTOMER_SEED.users[0]));
+  try {
+    const response = await request('/milestones/mile-b', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'action=cancel',
+    });
+    assert.equal(response.status, 404);
+    assert.equal(fakeStore._debugState.milestones.find((entry) => entry.id === 'mile-b').status, 'active');
+
+    const ownResponse = await request('/milestones/mile-a', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'action=cancel',
+    });
+    assert.equal(ownResponse.status, 302);
+    assert.equal(fakeStore._debugState.milestones.find((entry) => entry.id === 'mile-a').status, 'cancelled');
+  } finally {
+    setStorageAdapter(null);
+    resetAuthAdapter();
+  }
+});
+
+test('customer cannot create a milestone for another customer recipient', async () => {
+  resetData();
+  const fakeStore = createFakeAsyncStore(TWO_CUSTOMER_SEED);
+  setStorageAdapter(fakeStore);
+  setAuthAdapter(createFakeAuthAdapter(TWO_CUSTOMER_SEED.users[0]));
+  try {
+    const response = await request('/milestones', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'recipientId=rec-b&eventDate=2027-01-01&budgetTier=classic&occasionType=birthday',
+    });
+    assert.equal(response.status, 403);
+    assert.equal(fakeStore._debugState.milestones.length, 2);
+  } finally {
+    setStorageAdapter(null);
+    resetAuthAdapter();
+  }
+});
+
+test('payment consent revoke is scoped to the current customer', async () => {
+  resetData();
+  const fakeStore = createFakeAsyncStore(TWO_CUSTOMER_SEED);
+  setStorageAdapter(fakeStore);
+  setAuthAdapter(createFakeAuthAdapter(TWO_CUSTOMER_SEED.users[0]));
+  try {
+    const response = await request('/account/payment-consent/revoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'consentId=consent-b',
+    });
+    assert.equal(response.status, 404);
+    assert.equal(fakeStore._debugState.paymentConsents.find((entry) => entry.id === 'consent-b').active, true);
+
+    const ownResponse = await request('/account/payment-consent/revoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'consentId=consent-a',
+    });
+    assert.equal(ownResponse.status, 302);
+    assert.equal(fakeStore._debugState.paymentConsents.find((entry) => entry.id === 'consent-a').active, false);
+  } finally {
+    setStorageAdapter(null);
+    resetAuthAdapter();
+  }
+});
+
+test('account page only shows the current customer own payment consent', async () => {
+  resetData();
+  const fakeStore = createFakeAsyncStore(TWO_CUSTOMER_SEED);
+  setStorageAdapter(fakeStore);
+  setAuthAdapter(createFakeAuthAdapter(TWO_CUSTOMER_SEED.users[1]));
+  try {
+    const response = await request('/account');
+    assert.equal(response.status, 200);
+    assert.match(response.text, /Active and ready for concierge charging/);
+  } finally {
+    setStorageAdapter(null);
+    resetAuthAdapter();
+  }
+});
+
+test('admin email is accepted in Supabase auth mode', async () => {
+  const adapter = createSupabaseAuthAdapter(
+    {
+      SUPABASE_URL: 'https://example.supabase.co',
+      SUPABASE_ANON_KEY: 'anon-key',
+      ADMIN_EMAILS: 'admin@example.com',
+    },
+    {
+      createClient: () => ({
+        auth: {
+          getUser: async () => ({ data: { user: { email: 'admin@example.com', id: 'admin-user-1' } }, error: null }),
+        },
+      }),
+    },
+  );
+  const req = { headers: { cookie: 'sbAccessToken=fake-token' } };
+  const res = {
+    writeHead(status, headers) { this.statusCode = status; this.headers = headers; },
+    end() {},
+  };
+  const allowed = await adapter.requireAdmin(req, res);
+  assert.equal(allowed, true);
+});
+
+test('rate limiting blocks repeated failed login attempts', async () => {
+  resetData();
+  let response;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    response = await request('/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'email=',
+    });
+  }
+  assert.equal(response.status, 401);
+  const blockedResponse = await request('/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'email=',
+  });
+  assert.equal(blockedResponse.status, 429);
+  assert.doesNotMatch(blockedResponse.text, /password/i);
+});
+
+test('rate limiting blocks repeated failed admin login attempts', async () => {
+  resetData();
+  let response;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    response = await request('/admin/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'email=not-an-admin@example.com',
+    });
+  }
+  assert.equal(response.status, 403);
+  const blockedResponse = await request('/admin/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'email=not-an-admin@example.com',
+  });
+  assert.equal(blockedResponse.status, 429);
 });
