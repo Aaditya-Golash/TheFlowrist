@@ -1,9 +1,41 @@
+# Dependencies
 node_modules/
+
+# Environment and local credentials
 .env
 .env.*
 !.env.example
-npm-debug.log*
-logs/
-coverage/
-.DS_Store
+.mcp.json
+
+# Runtime data
 data/app-data.json
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Test/build output
+coverage/
+dist/
+build/
+.cache/
+.parcel-cache/
+
+# Supabase local CLI state
+supabase/.branches/
+supabase/.temp/
+supabase/.env.keys
+supabase/.env.local
+supabase/.env.*.local
+
+# Local agent/editor state
+.claude/
+.agents/skills/
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db

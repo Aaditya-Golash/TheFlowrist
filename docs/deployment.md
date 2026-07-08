@@ -107,7 +107,32 @@ This runs `npm test` (fully offline) followed by `npm run check:supabase` (requi
 - n8n, MCP, Playwright, Shopify — intentionally absent from this codebase.
 - Real Stripe charging — payment consent is recorded, but no charge is ever placed.
 - Public customer sign-up — pilot users are created manually in Supabase.
-- Row-level security policies beyond service-role access — the app itself is the only thing talking to the database today; RLS hardening is future work (see [docs/supabase-migration.md](supabase-migration.md)).
+- Row-level security policies — see the blocking item below.
+
+## 🛑 Before inviting real users — confirmed blocker, do not skip
+
+**Row Level Security is disabled on all 9 tables in the live Supabase project** (`customers`, `recipients`, `milestones`, `scheduled_orders`, `florist_partners`, `service_zones`, `payment_consents`, `order_event_logs`, `feedback`). Confirmed directly via the Supabase advisor scan (`get_advisors`, security lint `rls_disabled_in_public`, `ERROR` level) on 2026-07-08. This means anyone holding `SUPABASE_ANON_KEY` — a key meant to be safe for client-side/public use, and one this app already relies on for Supabase Auth — can read or write every row in every table, including `customers` and `payment_consents`, directly against PostgREST, bypassing the app entirely.
+
+This has to be resolved (or explicitly accepted with a documented reason) before any real pilot customer's data goes into this project. Two ways to close it:
+
+1. **Enable RLS with real policies** (recommended) — e.g. customers can only select/update their own row, recipients/milestones/orders scoped to the owning customer, admin access via the service-role key (which bypasses RLS, so the server keeps working). Ask for the policy SQL to be drafted against `lib/auth/supabaseAuth.js`'s customer-mapping logic when ready to do this.
+2. **Enable RLS with zero policies as a temporary lockdown** — blocks all anon/authenticated access outright; only the service-role key (used server-side) can read/write. Breaks nothing in this app today since all current requests go through the server, but blocks any future direct-from-browser Supabase usage until policies are added:
+   ```sql
+   ALTER TABLE public.customers ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE public.recipients ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE public.milestones ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE public.scheduled_orders ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE public.florist_partners ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE public.service_zones ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE public.payment_consents ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE public.order_event_logs ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE public.feedback ENABLE ROW LEVEL SECURITY;
+   ```
+
+Re-run the advisor check before launch to confirm this is actually resolved, not just remembered:
+```
+get_advisors(project_id, type="security")   # via the Supabase MCP connection
+```
 
 ## Remaining risks before inviting real users
 
