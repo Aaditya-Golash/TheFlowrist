@@ -33,9 +33,11 @@
 
 ## Row-level security notes
 
-- Start with service-role access for admin workflows.
-- Add customer-facing read access later once auth is in place.
-- Keep all mutation paths behind server-side logic and not directly from client code.
+Implemented. `supabase/schema.sql` enables RLS and adds ownership policies on `customers`, `recipients`, `milestones`, `scheduled_orders`, `payment_consents`, and `feedback`, keyed off a `customers.auth_user_id` column mapped to the Supabase Auth user. See [docs/security.md](security.md) for the full model.
+
+- The app itself still talks to Supabase only via the service-role key (`lib/supabaseStore.js`), which bypasses RLS — these policies protect against direct anon/authenticated-key access (e.g. from a browser holding `SUPABASE_ANON_KEY`), not against the server.
+- `florist_partners`, `service_zones`, and `order_event_logs` intentionally do not have RLS — internal ops/audit data, not customer-owned rows.
+- All mutation paths remain behind server-side logic (`lib/routes.js` via the storage adapter), not directly from client code.
 
 ## Auth plan
 
@@ -94,6 +96,6 @@ ADMIN_EMAILS=
 
 ## Current limitations
 
-- RLS/auth is not complete yet.
-- The app still uses server-side persistence only.
-- The Supabase adapter is currently a server-side read/write bridge behind the existing interface.
+- The app still uses server-side persistence only (service-role key); there is no direct-from-browser Supabase access.
+- The Supabase adapter is a server-side read/write bridge behind the existing storage-adapter interface, normalizing every row between the database's `snake_case` columns and the app's `camelCase` field names.
+- RLS policies are written and applied via schema, but not yet verified against a live project with real Supabase Auth sessions — see [docs/security.md](security.md) and the pre-launch checklist in [docs/deployment.md](deployment.md).

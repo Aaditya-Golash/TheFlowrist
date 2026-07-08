@@ -127,6 +127,9 @@ npm run smoke:supabase
 ## Private pilot deployment
 JSON storage and pilot auth are local/dev conveniences only. A real private pilot requires `STORAGE_BACKEND=supabase` and `AUTH_BACKEND=supabase`. n8n, MCP, Shopify, and real Stripe charging are intentionally not enabled. See [docs/deployment.md](docs/deployment.md) for the full checklist, required env vars, and rollback steps.
 
+## Security model
+Customer data (recipients, milestones, orders, payment consent) is scoped to the authenticated customer, admin routes require an email in `ADMIN_EMAILS`, `/login` and `/admin/login` are rate-limited, and Supabase Row Level Security policies are defined in [supabase/schema.sql](supabase/schema.sql). See [docs/security.md](docs/security.md) for the full model and current limitations.
+
 ## Internal automation endpoints
 These are protected by `INTERNAL_API_SECRET` and return JSON only for trusted automation workflows.
 
@@ -153,7 +156,7 @@ docker run -p 3000:3000 theflowrist
 - The default data layer is JSON-backed and suitable for a concierge MVP beta.
 - Supabase is server-side persistence only for now and is not yet wired to public client access.
 - Supabase Auth is available as an optional backend (`AUTH_BACKEND=supabase`); see [docs/auth.md](docs/auth.md). Public sign-up is not enabled — pilot users are created manually in the Supabase dashboard.
-- RLS work remains future work.
+- RLS policies are defined in [supabase/schema.sql](supabase/schema.sql); the app itself still talks to Supabase only via the service-role key (which bypasses RLS) — see [docs/security.md](docs/security.md).
 - n8n endpoints are available for future automation.
 - MCP is intentionally not enabled.
 - External repos are references only for future planning.

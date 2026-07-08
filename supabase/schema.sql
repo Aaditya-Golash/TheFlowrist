@@ -11,9 +11,19 @@ create table if not exists customers (
   phone text,
   marketing_email_consent boolean not null default false,
   marketing_sms_consent boolean not null default false,
+  -- Maps this customer row to the Supabase Auth user (auth.users.id) that
+  -- owns it. Nullable because pilot-mode/JSON-imported customers may not
+  -- have a Supabase Auth account; the app backfills this on first Supabase
+  -- Auth login (see lib/auth/supabaseAuth.js). Prefer this over email
+  -- matching for RLS since email isn't guaranteed stable/unique long-term.
+  auth_user_id uuid unique,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Additive/idempotent: safe to run again against a table created before
+-- this column existed.
+alter table customers add column if not exists auth_user_id uuid unique;
 
 create table if not exists recipients (
   id text primary key,
@@ -149,3 +159,80 @@ create index if not exists idx_order_event_logs_created_at on order_event_logs(c
 create index if not exists idx_payment_consents_customer_id on payment_consents(customer_id);
 create index if not exists idx_florist_partners_active on florist_partners(active);
 create index if not exists idx_service_zones_active on service_zones(active);
+create index if not exists idx_customers_auth_user_id on customers(auth_user_id);
+create index if not exists idx_feedback_order_id on feedback(order_id);
+
+-- =============================================================================
+-- Row Level Security
+-- =============================================================================
+-- The app today talks to Supabase exclusively through the server-side
+-- service role key (see lib/supabaseStore.js), which bypasses RLS entirely.
+-- These policies exist so that:
+--   1. the anon/authenticated keys (already shipped to the browser for
+--      Supabase Auth session handling) cannot read or write this data
+--      directly, bypassing the app's own route guards and ownership checks;
+--   2. a future client-safe/direct-from-browser Supabase usage has a
+--      correct, tested policy set to build on rather than starting from
+--      "everything is open."
+-- Nothing below changes how the app itself behaves — the service role key
+-- is unaffected by RLS. See docs/security.md for the full model.
+
+alter table customers enable row level security;
+alter table recipients enable row level security;
+alter table milestones enable row level security;
+alter table scheduled_orders enable row level security;
+alter table payment_consents enable row level security;
+alter table feedback enable row level security;
+
+-- NOTE: florist_partners, service_zones, and order_event_logs are
+-- intentionally left without RLS here — they are internal
+-- concierge/ops data (or, for order_event_logs, an audit trail tied to
+-- scheduled_orders) rather than customer-owned rows. Review before any
+-- future direct-from-browser access to those tables.
+
+-- customers: a row is visible/editable only by the Supabase Auth user it
+-- is mapped to via auth_user_id.
+drop policy if exists customers_select_own on customers;
+create policy customers_select_own on customers
+  for select using (auth_user_id = auth.uid());
+
+drop policy if exists customers_update_own on customers;
+create policy customers_update_own on customers
+  for update using (auth_user_id = auth.uid());
+
+-- recipients/milestones/scheduled_orders/payment_consents: scoped to rows
+-- whose customer_id maps to a customers row owned by the requesting user.
+drop policy if exists recipients_owner_access on recipients;
+create policy recipients_owner_access on recipients
+  for all using (
+    customer_id in (select id from customers where auth_user_id = auth.uid())
+  );
+
+drop policy if exists milestones_owner_access on milestones;
+create policy milestones_owner_access on milestones
+  for all using (
+    customer_id in (select id from customers where auth_user_id = auth.uid())
+  );
+
+drop policy if exists scheduled_orders_owner_access on scheduled_orders;
+create policy scheduled_orders_owner_access on scheduled_orders
+  for all using (
+    customer_id in (select id from customers where auth_user_id = auth.uid())
+  );
+
+drop policy if exists payment_consents_owner_access on payment_consents;
+create policy payment_consents_owner_access on payment_consents
+  for all using (
+    customer_id in (select id from customers where auth_user_id = auth.uid())
+  );
+
+-- feedback: scoped via the order it belongs to (feedback has no customer_id
+-- column of its own).
+drop policy if exists feedback_owner_access on feedback;
+create policy feedback_owner_access on feedback
+  for all using (
+    order_id in (
+      select id from scheduled_orders
+      where customer_id in (select id from customers where auth_user_id = auth.uid())
+    )
+  );
