@@ -14,6 +14,7 @@ const { buildReadiness, validateProductionEnvironment } = require('../lib/env-ch
 const { resetAllRateLimiters } = require('../lib/rate-limiter');
 const { assertCustomerOwnsRecipient, assertCustomerOwnsMilestone, assertCustomerOwnsOrder } = require('../lib/ownership');
 const { estimatePlatformProfitCents } = require('../lib/pricing');
+const { setStripeClient, resetStripeClient } = require('../lib/stripe-client');
 const {
   calculatePlannedChargeDate,
   createScheduledOrderFromMilestone,
@@ -51,11 +52,44 @@ const resetData = () => {
   process.env.AUTH_BACKEND = 'pilot';
   delete process.env.SUPABASE_URL;
   delete process.env.SUPABASE_ANON_KEY;
+  delete process.env.STRIPE_SECRET_KEY;
   resetAuthAdapter();
   setStorageAdapter(null);
+  resetStripeClient();
   resetAllRateLimiters();
   writeSeedData();
 };
+
+function createFakeStripeClient({ customerId = 'cus_fake', paymentMethodId = 'pm_fake', sessionId = 'cs_fake', declineCharge = false } = {}) {
+  return {
+    customers: {
+      async create(params) { return { id: customerId, ...params }; },
+    },
+    checkout: {
+      sessions: {
+        async create(params) { return { id: sessionId, url: `https://checkout.stripe.com/pay/${sessionId}`, customer: customerId, ...params }; },
+        async retrieve(id) {
+          return {
+            id,
+            customer: customerId,
+            status: 'complete',
+            setup_intent: { status: 'succeeded', payment_method: paymentMethodId },
+          };
+        },
+      },
+    },
+    paymentIntents: {
+      async create(params) {
+        if (declineCharge) {
+          const error = new Error('Your card was declined.');
+          error.code = 'card_declined';
+          throw error;
+        }
+        return { id: 'pi_fake', status: 'succeeded', ...params };
+      },
+    },
+  };
+}
 
 function createFakeAsyncStore(seed) {
   const state = JSON.parse(JSON.stringify(seed));
@@ -227,9 +261,19 @@ test('payment page includes no-charge-today copy', async () => {
   assert.equal(response.status, 200);
   assert.match(response.text, /not charged today/i);
   assert.match(response.text, /remind you before/i);
-  assert.match(response.text, /pause before the cutoff/i);
-  assert.match(response.text, /Payment capture is not enabled in this local pilot build/i);
+  // Must say the customer can do BOTH — "pause" alone would misstate what
+  // the product actually supports (milestones can also be cancelled).
+  assert.match(response.text, /pause or cancel before the cutoff/i);
+  assert.match(response.text, /remain server-side/i);
   assert.match(response.text, /vault-panel/);
+});
+
+test('payment consent page without Stripe configured shows a clear unavailable state, not a broken form', async () => {
+  resetData();
+  delete process.env.STRIPE_SECRET_KEY;
+  const response = await request('/account/payment-consent');
+  assert.equal(response.status, 200);
+  assert.match(response.text, /not configured in this environment/i);
 });
 
 test('dashboard includes add important date CTA', async () => {
@@ -374,27 +418,88 @@ test('admin status update creates event log', async () => {
   assert.ok(createdEvent);
 });
 
-test('payment consent create and revoke work', async () => {
+test('declining consent records an inactive consent without touching Stripe', async () => {
   resetData();
   const consentResponse = await request('/account/payment-consent', {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: 'consent=true',
+    body: 'consent=false',
   });
   assert.equal(consentResponse.status, 302);
   const state = require('../lib/store').getState();
   const consent = state.paymentConsents[state.paymentConsents.length - 1];
-  assert.equal(consent.active, true);
+  assert.equal(consent.active, false);
+  assert.equal(consent.stripeCustomerId, '');
+});
 
-  const revokeResponse = await request('/account/payment-consent/revoke', {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: `consentId=${consent.id}`,
-  });
-  assert.equal(revokeResponse.status, 302);
-  const nextState = require('../lib/store').getState();
-  const revokedConsent = nextState.paymentConsents.find((entry) => entry.id === consent.id);
-  assert.equal(revokedConsent.active, false);
+test('real Stripe setup flow: saving consent creates a Checkout Session and completing it stores real IDs', async () => {
+  resetData();
+  setStripeClient(createFakeStripeClient({ customerId: 'cus_test123', paymentMethodId: 'pm_test123', sessionId: 'cs_test123' }));
+  try {
+    const checkoutResponse = await request('/account/payment-consent', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'consent=true',
+    });
+    assert.equal(checkoutResponse.status, 302);
+    const redirectLocation = checkoutResponse.headers.get('location') || '';
+    assert.match(redirectLocation, /checkout\.stripe\.com/);
+
+    const completeResponse = await request('/account/payment-consent/complete?session_id=cs_test123');
+    assert.equal(completeResponse.status, 302);
+    assert.match(completeResponse.headers.get('location') || '', /setup=complete/);
+
+    const state = require('../lib/store').getState();
+    const consent = state.paymentConsents[state.paymentConsents.length - 1];
+    assert.equal(consent.active, true);
+    assert.equal(consent.stripeCustomerId, 'cus_test123');
+    assert.equal(consent.stripePaymentMethodId, 'pm_test123');
+
+    const revokeResponse = await request('/account/payment-consent/revoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: `consentId=${consent.id}`,
+    });
+    assert.equal(revokeResponse.status, 302);
+    const nextState = require('../lib/store').getState();
+    const revokedConsent = nextState.paymentConsents.find((entry) => entry.id === consent.id);
+    assert.equal(revokedConsent.active, false);
+  } finally {
+    resetStripeClient();
+  }
+});
+
+test('a second payment method setup reuses the existing Stripe customer instead of creating a duplicate', async () => {
+  resetData();
+  let customerCreateCalls = 0;
+  const fakeClient = createFakeStripeClient({ customerId: 'cus_reused', paymentMethodId: 'pm_first', sessionId: 'cs_first' });
+  fakeClient.customers.create = async (params) => { customerCreateCalls += 1; return { id: 'cus_reused', ...params }; };
+  setStripeClient(fakeClient);
+  try {
+    await request('/account/payment-consent', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'consent=true',
+    });
+    await request('/account/payment-consent/complete?session_id=cs_first');
+    assert.equal(customerCreateCalls, 1);
+
+    fakeClient.checkout.sessions.retrieve = async (id) => ({
+      id,
+      customer: 'cus_reused',
+      status: 'complete',
+      setup_intent: { status: 'succeeded', payment_method: 'pm_second' },
+    });
+    await request('/account/payment-consent', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'consent=true',
+    });
+    await request('/account/payment-consent/complete?session_id=cs_second');
+    assert.equal(customerCreateCalls, 1, 'a second setup should reuse the existing Stripe customer, not create another');
+  } finally {
+    resetStripeClient();
+  }
 });
 
 test('milestone pause updates milestone status', async () => {
@@ -567,6 +672,250 @@ test('internal status endpoint updates order status and logs it', async () => {
   assert.ok(createdEvent);
 });
 
+test('needing-reminder only returns orders whose reminder date has actually arrived', async () => {
+  resetData();
+  const state = require('../lib/store').getState();
+  const dueMilestone = state.milestones.find((entry) => entry.id === 'milestone-1');
+  dueMilestone.reminderDaysBefore = 7;
+  const notDueOrder = {
+    id: 'order-not-due',
+    userId: 'user-1',
+    recipientId: 'recipient-1',
+    milestoneId: 'milestone-1',
+    eventDate: '2099-01-01',
+    plannedChargeDate: '2098-12-27',
+    budgetTier: 'classic',
+    estimatedCustomerPriceCents: 14500,
+    deliveryFeeCents: 0,
+    status: 'scheduled',
+    floristPartnerId: null,
+    internalNotes: '',
+    customerNotes: '',
+    generatedCardMessage: '',
+    photoProofUrl: '',
+    deliveredAt: null,
+    supportMinutes: 0,
+    refundAmountCents: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+  state.orders.push(notDueOrder);
+  require('../lib/store').setState(state);
+
+  const response = await request('/internal/orders/needing-reminder', {
+    headers: { 'x-internal-api-secret': 'test-secret' },
+  });
+  assert.equal(response.status, 200);
+  const payload = JSON.parse(response.text);
+  const returnedIds = payload.orders.map((order) => order.id);
+  assert.ok(!returnedIds.includes('order-not-due'), 'an order over a year away should not be flagged for a reminder yet');
+});
+
+test('cancelling a milestone cascades to cancel its scheduled order, blocking any future charge', async () => {
+  resetData();
+  const state = require('../lib/store').getState();
+  const milestone = state.milestones.find((entry) => entry.id === 'milestone-1');
+  assert.equal(milestone.status, 'active');
+  const order = state.orders.find((entry) => entry.milestoneId === 'milestone-1');
+  assert.equal(order.status, 'scheduled');
+
+  const cancelResponse = await request(`/milestones/${milestone.id}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'action=cancel',
+  });
+  assert.equal(cancelResponse.status, 302);
+
+  const afterCancel = require('../lib/store').getState();
+  const cancelledOrder = afterCancel.orders.find((entry) => entry.id === order.id);
+  assert.equal(cancelledOrder.status, 'cancelled');
+  const cascadeEvent = afterCancel.orderEvents.find((entry) => entry.orderId === order.id && /protected date was cancelled/i.test(entry.message));
+  assert.ok(cascadeEvent);
+
+  // Now prove the charge step actually refuses to charge it, and never calls Stripe.
+  let stripeCalled = false;
+  setStripeClient({
+    paymentIntents: { async create() { stripeCalled = true; return { id: 'pi_should_not_happen', status: 'succeeded' }; } },
+  });
+  try {
+    const chargeResponse = await request(`/internal/orders/${order.id}/charge`, {
+      method: 'POST',
+      headers: { 'x-internal-api-secret': 'test-secret' },
+    });
+    assert.equal(chargeResponse.status, 200);
+    const chargePayload = JSON.parse(chargeResponse.text);
+    assert.equal(chargePayload.charged, false);
+    assert.equal(stripeCalled, false, 'a cancelled order must never reach Stripe');
+    const finalState = require('../lib/store').getState();
+    assert.equal(finalState.orders.find((entry) => entry.id === order.id).status, 'cancelled');
+  } finally {
+    resetStripeClient();
+  }
+});
+
+test('charge endpoint: successful charge marks the order charged and stores the payment intent id', async () => {
+  resetData();
+  const state = require('../lib/store').getState();
+  state.paymentConsents.push({
+    id: 'consent-real',
+    userId: 'user-1',
+    stripeCustomerId: 'cus_real',
+    stripePaymentMethodId: 'pm_real',
+    consentTextVersion: 'v1',
+    consentTextSnapshot: 'snapshot',
+    consentedAt: new Date().toISOString(),
+    ipAddress: '',
+    userAgent: '',
+    active: true,
+  });
+  require('../lib/store').setState(state);
+  setStripeClient(createFakeStripeClient());
+  try {
+    const response = await request('/internal/orders/order-1/charge', {
+      method: 'POST',
+      headers: { 'x-internal-api-secret': 'test-secret' },
+    });
+    assert.equal(response.status, 200);
+    const payload = JSON.parse(response.text);
+    assert.equal(payload.charged, true);
+    assert.equal(payload.paymentIntentId, 'pi_fake');
+    const nextState = require('../lib/store').getState();
+    const order = nextState.orders.find((entry) => entry.id === 'order-1');
+    assert.equal(order.status, 'charged');
+    assert.equal(order.stripePaymentIntentId, 'pi_fake');
+    const chargeEvent = nextState.orderEvents.find((entry) => entry.orderId === 'order-1' && /charge succeeded/i.test(entry.message));
+    assert.ok(chargeEvent);
+  } finally {
+    resetStripeClient();
+  }
+});
+
+test('charge endpoint: a declined card is logged as an issue, not silently dropped', async () => {
+  resetData();
+  const state = require('../lib/store').getState();
+  state.paymentConsents.push({
+    id: 'consent-decline',
+    userId: 'user-1',
+    stripeCustomerId: 'cus_declined',
+    stripePaymentMethodId: 'pm_declined',
+    consentTextVersion: 'v1',
+    consentTextSnapshot: 'snapshot',
+    consentedAt: new Date().toISOString(),
+    ipAddress: '',
+    userAgent: '',
+    active: true,
+  });
+  require('../lib/store').setState(state);
+  setStripeClient(createFakeStripeClient({ declineCharge: true }));
+  try {
+    const response = await request('/internal/orders/order-1/charge', {
+      method: 'POST',
+      headers: { 'x-internal-api-secret': 'test-secret' },
+    });
+    assert.equal(response.status, 200);
+    const payload = JSON.parse(response.text);
+    assert.equal(payload.charged, false);
+    assert.equal(payload.reason, 'card_declined');
+    const nextState = require('../lib/store').getState();
+    const order = nextState.orders.find((entry) => entry.id === 'order-1');
+    assert.equal(order.status, 'issue_reported');
+    const issueResponse = await request('/internal/orders/issues', { headers: { 'x-internal-api-secret': 'test-secret' } });
+    const issuePayload = JSON.parse(issueResponse.text);
+    assert.ok(issuePayload.orders.some((entry) => entry.id === 'order-1'), 'a declined charge must surface in the issues queue');
+  } finally {
+    resetStripeClient();
+  }
+});
+
+test('charge endpoint: missing payment method fails closed without calling Stripe', async () => {
+  resetData();
+  // Seed's default consent-1 is active but has empty Stripe IDs — exactly the
+  // "no real payment method on file" case.
+  let stripeCalled = false;
+  setStripeClient({ paymentIntents: { async create() { stripeCalled = true; return { id: 'pi_x', status: 'succeeded' }; } } });
+  try {
+    const response = await request('/internal/orders/order-1/charge', {
+      method: 'POST',
+      headers: { 'x-internal-api-secret': 'test-secret' },
+    });
+    assert.equal(response.status, 200);
+    const payload = JSON.parse(response.text);
+    assert.equal(payload.charged, false);
+    assert.equal(payload.reason, 'no_payment_method');
+    assert.equal(stripeCalled, false);
+    const nextState = require('../lib/store').getState();
+    assert.equal(nextState.orders.find((entry) => entry.id === 'order-1').status, 'issue_reported');
+  } finally {
+    resetStripeClient();
+  }
+});
+
+test('charge endpoint is idempotent: an already-charged order is never charged twice', async () => {
+  resetData();
+  const state = require('../lib/store').getState();
+  state.orders.find((entry) => entry.id === 'order-1').status = 'charged';
+  require('../lib/store').setState(state);
+  let stripeCalls = 0;
+  setStripeClient({ paymentIntents: { async create() { stripeCalls += 1; return { id: 'pi_dup', status: 'succeeded' }; } } });
+  try {
+    const response = await request('/internal/orders/order-1/charge', {
+      method: 'POST',
+      headers: { 'x-internal-api-secret': 'test-secret' },
+    });
+    assert.equal(response.status, 200);
+    const payload = JSON.parse(response.text);
+    assert.equal(payload.alreadyCharged, true);
+    assert.equal(stripeCalls, 0);
+  } finally {
+    resetStripeClient();
+  }
+});
+
+test('admin can apply a manual price override with a required reason', async () => {
+  resetData();
+  const state = require('../lib/store').getState();
+  const order = state.orders[0];
+  const response = await request(`/admin/orders/${order.id}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', cookie: 'adminEmail=admin@example.com' },
+    body: `status=${order.status}&priceOverrideDollars=175.00&priceOverrideReason=Holiday+surcharge+approved+by+founder`,
+  });
+  assert.equal(response.status, 302);
+  const nextState = require('../lib/store').getState();
+  const updatedOrder = nextState.orders.find((entry) => entry.id === order.id);
+  assert.equal(updatedOrder.estimatedCustomerPriceCents, 17500);
+  assert.equal(updatedOrder.priceOverrideReason, 'Holiday surcharge approved by founder');
+  const overrideEvent = nextState.orderEvents.find((entry) => entry.orderId === order.id && entry.type === 'price_override');
+  assert.ok(overrideEvent);
+});
+
+test('admin price override without a reason is rejected', async () => {
+  resetData();
+  const state = require('../lib/store').getState();
+  const order = state.orders[0];
+  const response = await request(`/admin/orders/${order.id}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', cookie: 'adminEmail=admin@example.com' },
+    body: `status=${order.status}&priceOverrideDollars=175.00`,
+  });
+  assert.equal(response.status, 400);
+});
+
+test('admin cannot mark an order delivered without photo proof', async () => {
+  resetData();
+  const state = require('../lib/store').getState();
+  const order = state.orders.find((entry) => entry.id === 'order-1');
+  order.status = 'out_for_delivery';
+  order.photoProofUrl = '';
+  require('../lib/store').setState(state);
+  const response = await request(`/admin/orders/${order.id}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', cookie: 'adminEmail=admin@example.com' },
+    body: 'status=delivered',
+  });
+  assert.equal(response.status, 400);
+});
+
 test('check script env validation fails clearly', () => {
   const { validateSupabaseEnvironment } = require('../scripts/check-supabase');
   assert.throws(() => validateSupabaseEnvironment({}), /SUPABASE_URL|SUPABASE_SERVICE_ROLE_KEY/i);
@@ -645,6 +994,69 @@ test('scripts do not log secret values', async () => {
   const smokeOutput = smokeLines.join('\n');
   assert.equal(smokeOutput.includes('super-secret-value'), false);
   assert.equal(smokeOutput.includes('pilot-smoke-test@example.com'), false);
+});
+
+test('send-reminders requires RESEND_API_KEY and INTERNAL_API_SECRET', async () => {
+  const { runSendReminders } = require('../scripts/send-reminders');
+  await assert.rejects(() => runSendReminders({ env: {} }), /RESEND_API_KEY/);
+  await assert.rejects(() => runSendReminders({ env: { RESEND_API_KEY: 'x' } }), /INTERNAL_API_SECRET/);
+});
+
+test('send-reminders emails due orders, marks them reminder-sent, and never logs the API key', async () => {
+  const { runSendReminders } = require('../scripts/send-reminders');
+  const seed = {
+    users: [{ id: 'cust-r', name: 'Rae', email: 'rae@example.com', phone: '', marketingEmailConsent: false, marketingSmsConsent: false, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }],
+    recipients: [{ id: 'rec-r', userId: 'cust-r', name: 'Priya', relationship: 'sister', phone: '', addressLine1: '1 St', addressLine2: '', city: 'Toronto', province: 'ON', postalCode: 'M5V 2T6', deliveryInstructions: '', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }],
+    milestones: [{ id: 'mile-r', userId: 'cust-r', recipientId: 'rec-r', occasionType: 'birthday', occasionLabel: "Priya's birthday", eventDate: '2026-01-05', repeatsAnnually: true, budgetTier: 'premium', status: 'active', cardMessageTone: 'warm', stylePreferences: '', allergiesOrAvoid: '', hardNoPreferences: '', reminderDaysBefore: 7, chargeDaysBefore: 5, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }],
+    orders: [{ id: 'order-r', userId: 'cust-r', recipientId: 'rec-r', milestoneId: 'mile-r', eventDate: '2026-01-05', plannedChargeDate: '2025-12-31', budgetTier: 'premium', estimatedCustomerPriceCents: 19500, deliveryFeeCents: 0, status: 'scheduled', floristPartnerId: null, internalNotes: '', customerNotes: '', generatedCardMessage: '', photoProofUrl: '', deliveredAt: null, supportMinutes: 0, refundAmountCents: null, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }],
+    floristPartners: [],
+    serviceZones: [],
+    paymentConsents: [],
+    orderEvents: [],
+    feedback: [],
+  };
+  const fakeStore = createFakeAsyncStore(seed);
+  const fetchCalls = [];
+  const fakeFetch = async (url, options) => {
+    fetchCalls.push({ url, options });
+    return { ok: true, json: async () => ({ id: 'email_fake' }) };
+  };
+  const results = await runSendReminders({
+    env: { RESEND_API_KEY: 'super-secret-resend-key', INTERNAL_API_SECRET: 'test-secret', APP_BASE_URL: 'https://theflowerist.example' },
+    adapter: fakeStore,
+    logger: () => {},
+    fetchImpl: fakeFetch,
+  });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].orderId, 'order-r');
+  assert.equal(results[0].sent, true);
+  assert.equal(fetchCalls.length, 1);
+  assert.equal(fetchCalls[0].url, 'https://api.resend.com/emails');
+  assert.equal(fetchCalls[0].options.headers.Authorization, 'Bearer super-secret-resend-key');
+  const requestBody = JSON.parse(fetchCalls[0].options.body);
+  assert.equal(requestBody.to, 'rae@example.com');
+  assert.match(requestBody.subject, /Priya/);
+
+  const updatedOrder = (await fakeStore.getState()).orders.find((entry) => entry.id === 'order-r');
+  assert.equal(updatedOrder.status, 'pre_charge_reminder_sent');
+  assert.ok(!JSON.stringify(results).includes('super-secret-resend-key'));
+});
+
+test('buildReminderEmail includes recipient name, occasion, tier, amount, and a pause/cancel link', () => {
+  const { buildReminderEmail } = require('../lib/notifications');
+  const email = buildReminderEmail({
+    order: { budgetTier: 'premium', estimatedCustomerPriceCents: 19500, plannedChargeDate: '2026-08-10' },
+    milestone: { occasionLabel: "Priya's birthday", occasionType: 'birthday' },
+    recipient: { name: 'Priya' },
+    customer: { name: 'Rae', email: 'rae@example.com' },
+    baseUrl: 'https://theflowerist.example',
+  });
+  assert.match(email.subject, /Priya/);
+  assert.match(email.text, /Priya's birthday/);
+  assert.match(email.text, /Premium/);
+  assert.match(email.text, /\$195/);
+  assert.match(email.text, /https:\/\/theflowerist\.example\/dashboard/);
+  assert.match(email.html, /https:\/\/theflowerist\.example\/dashboard/);
 });
 
 test('AUTH_BACKEND defaults to pilot', () => {
@@ -793,6 +1205,7 @@ test('production mode accepts valid required env var shape', () => {
     AUTH_BACKEND: 'pilot',
     INTERNAL_API_SECRET: 'secret',
     ADMIN_EMAILS: 'admin@example.com',
+    STRIPE_SECRET_KEY: 'sk_test_fake',
   });
   assert.equal(result.ok, true);
   assert.deepEqual(result.errors, []);
@@ -805,9 +1218,22 @@ test('production mode requires supabase env vars when selected', () => {
     AUTH_BACKEND: 'supabase',
     INTERNAL_API_SECRET: 'secret',
     ADMIN_EMAILS: 'admin@example.com',
+    STRIPE_SECRET_KEY: 'sk_test_fake',
   });
   assert.equal(result.ok, false);
   assert.ok(result.errors.some((message) => /SUPABASE_URL/.test(message)));
+});
+
+test('production mode requires a real Stripe secret key', () => {
+  const result = validateProductionEnvironment({
+    NODE_ENV: 'production',
+    STORAGE_BACKEND: 'json',
+    AUTH_BACKEND: 'pilot',
+    INTERNAL_API_SECRET: 'secret',
+    ADMIN_EMAILS: 'admin@example.com',
+  });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((message) => /STRIPE_SECRET_KEY/.test(message)));
 });
 
 test('cookies are marked secure in production', async () => {

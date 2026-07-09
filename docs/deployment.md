@@ -4,8 +4,8 @@ This document covers deploying TheFlowerist for a small, invite-only private pil
 
 ## What this pilot deployment is (and is not)
 
-- **Is**: a single Node.js process, real Supabase persistence, real Supabase Auth, manual concierge fulfillment by an admin.
-- **Is not**: n8n automation, MCP, Shopify, real Stripe charging, a redesigned frontend, or a rewritten architecture. None of that is enabled and none of it should be added as part of going live for the pilot.
+- **Is**: a single Node.js process, real Supabase persistence, real Supabase Auth, real Stripe payment capture and charging (test-mode keys only), manual concierge fulfillment by an admin.
+- **Is not**: n8n installed as a service, MCP, Shopify, a redesigned frontend, a rewritten architecture, or live Stripe keys. None of that is enabled and none of it should be added as part of going live for the pilot. (The internal endpoints that an n8n workflow would call already exist — see [docs/n8n-workflows.md](../docs/n8n-workflows.md) — but n8n itself is not required or installed.)
 
 ## Recommended deployment targets
 
@@ -29,11 +29,16 @@ SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 INTERNAL_API_SECRET=
 ADMIN_EMAILS=
+STRIPE_SECRET_KEY=
 ```
 
-Also set `ALLOWED_ORIGINS` to your real pilot domain(s) (comma-separated) - do not leave it defaulted to `http://localhost:3000`.
+Also set `ALLOWED_ORIGINS` to your real pilot domain(s) (comma-separated) - do not leave it defaulted to `http://localhost:3000`. Set `APP_BASE_URL` to your real pilot domain too — it's used to build Stripe Checkout redirect URLs and reminder-email links.
 
-At startup, if `NODE_ENV=production`, the server validates these and refuses to start with a clear list of what's missing (see `lib/env-check.js` / `server.js`) instead of silently falling back to an unsafe default.
+Optional but needed for reminders to actually go out: `RESEND_API_KEY` and `REMINDER_FROM_EMAIL` (see `npm run send:reminders` below).
+
+At startup, if `NODE_ENV=production`, the server validates these and refuses to start with a clear list of what's missing (see `lib/env-check.js` / `server.js`) instead of silently falling back to an unsafe default. `STRIPE_SECRET_KEY` is included in that check — the server will not start in production without it.
+
+**Use Stripe test-mode keys (`sk_test_...`) for this private pilot.** Do not put a live key (`sk_live_...`) in any environment until you've had a chance to review consent/refund copy and are ready to actually charge real customers — see "Remaining risks" below.
 
 ## Supabase setup checklist
 
@@ -114,10 +119,23 @@ This runs `npm test` (fully offline) followed by `npm run check:supabase` (requi
 
 ## What not to enable yet
 
-- n8n, MCP, Playwright, Shopify - intentionally absent from this codebase.
-- Real Stripe charging - payment consent is recorded, but no charge is ever placed.
+- n8n (as an installed service), MCP, Playwright, Shopify - intentionally absent from this codebase. The internal HTTP endpoints an n8n workflow would call already exist, but n8n itself is not required.
+- Live Stripe keys - only `sk_test_...` keys should be configured anywhere until consent/refund copy has had a non-engineering review (see "Remaining risks" below).
 - Public customer sign-up - pilot users are created manually in Supabase.
 - Row-level security policies - defined in `supabase/schema.sql`, see below.
+
+## Hosting and cost (free-tier beta stack)
+
+For a small private pilot, the whole stack can run at effectively $0 fixed cost:
+
+| Component | Recommended free tier | Notes |
+| --- | --- | --- |
+| App hosting | Render or Fly.io free/hobby tier | Needs a long-lived Node process (see "Recommended deployment targets" above) |
+| Database + Auth | Supabase free tier | Covers a small pilot's data volume comfortably |
+| Payments | Stripe, pay-per-transaction, test mode | No fixed cost; test mode has zero cost at all since no card is ever really charged |
+| Reminder email | Resend or Postmark free tier | Both offer enough free monthly sends for a handful of pilot customers |
+
+Nothing above requires a paid plan to run this pilot. The only per-transaction cost (Stripe's processing fee) only applies once you switch to a live key — which this codebase intentionally does not do.
 
 ## Applying RLS to an already-deployed project
 
@@ -132,6 +150,10 @@ get_advisors(project_id, type="security")   # via the Supabase MCP connection
 
 ## Remaining risks before inviting real users
 
+- **Consent and refund copy needs a non-engineering (even informal legal) review before any live charge is ever placed.** The consent text in `CONSENT_TEXT_SNAPSHOT` (`lib/routes.js`) and the reminder-email copy in `lib/notifications.js` were written by an engineer, not reviewed by counsel. Do this before flipping to a live Stripe key — not before, since test mode never actually charges anyone.
+- **Charge scheduling is not automated.** `POST /internal/orders/:id/charge` and `npm run send:reminders` both need something external to actually call them on a schedule (cron, a hosted scheduler, or n8n). Nothing in this repo triggers them on its own.
+- **Refunds are manual.** There is no `POST /internal/orders/:id/refund` or admin refund action yet — a refund today means using the Stripe dashboard directly and then updating the order's status/`refundAmountCents` by hand in the admin UI.
+- **The reminder script marks an order `pre_charge_reminder_sent` even if the email silently bounces** (Resend accepted it, but the recipient's inbox rejected it later) - there's no bounce-webhook handling yet.
 - **Rate limiting is in-memory and single-process** ([lib/rate-limiter.js](../lib/rate-limiter.js)) - fine for one small pilot instance, resets on restart, and doesn't share state across multiple instances behind a load balancer. Not a substitute for a real distributed rate limiter at scale.
 - No password reset/magic-link UI - a locked-out user needs manual help via the Supabase dashboard.
 - No automated backups verification - confirm Supabase's backup settings match your risk tolerance before go-live.

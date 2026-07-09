@@ -12,6 +12,7 @@
     "check:supabase": "node scripts/check-supabase.js",
     "migrate:supabase": "node scripts/migrate-json-to-supabase.js",
     "smoke:supabase": "node scripts/smoke-supabase.js",
+    "send:reminders": "node scripts/send-reminders.js",
     "test": "node --test",
     "predeploy:check": "npm test && npm run check:supabase"
   },
@@ -22,6 +23,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
     "dotenv": "^16.4.0",
+    "stripe": "^22.3.0",
     "ws": "^8.21.0"
   }
 }
