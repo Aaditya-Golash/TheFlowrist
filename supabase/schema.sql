@@ -80,9 +80,15 @@ create table if not exists scheduled_orders (
   delivered_at timestamptz,
   support_minutes integer not null default 0,
   refund_amount_cents integer,
+  stripe_payment_intent_id text,
+  price_override_reason text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Migration-safe for pre-existing tables created before Phase 2 (real Stripe charging).
+alter table scheduled_orders add column if not exists stripe_payment_intent_id text;
+alter table scheduled_orders add column if not exists price_override_reason text;
 
 create table if not exists florist_partners (
   id text primary key,

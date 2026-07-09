@@ -48,3 +48,10 @@
 - Expected payload: issue and refund orders for manual review
 - Manual approval step: human approves the escalation path
 - Failure fallback: create a support task and keep the order visible in admin operations
+
+## 8. Charge execution (added in Phase 2 — real Stripe charging)
+- Trigger: schedule, once an order's `plannedChargeDate` has arrived
+- Internal endpoint: POST /internal/orders/:id/charge
+- Expected payload: `{ ok, orderId, charged, reason? }` — idempotent; already-charged orders and orders whose milestone was paused/cancelled are safely no-ops
+- Manual approval step: none by design — charging on the planned date is the automated step this whole system exists to support; disputes/refunds are handled manually afterward (workflow #7)
+- Failure fallback: a declined card or missing payment method transitions the order to `issue_reported` (visible via workflow #7) rather than silently failing or retrying indefinitely

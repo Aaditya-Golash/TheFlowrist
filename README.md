@@ -1,7 +1,7 @@
 # TheFlowerist
 
 This is a concierge MVP.
-No real payments yet.
+Real Stripe payment capture and charging, in Stripe **test mode** only — no live keys are wired up.
 No Shopify automation yet.
 No Playwright automation yet.
 JSON storage is temporary.
@@ -15,9 +15,9 @@ TheFlowerist is a concierge-first MVP for milestone flower gifting. The current 
 - scheduled order generation from milestones
 - admin dashboard and manual order management
 - basic service zone and florist partner data
-- payment-consent placeholder flow with Stripe integration TODOs
+- real payment method capture via Stripe Checkout (setup mode) and real off-session charging via Stripe PaymentIntents — test-mode keys only
 - a storage adapter boundary for future Supabase migration
-- internal JSON endpoints for future n8n automation prep
+- internal JSON endpoints backing the documented n8n workflows in [docs/n8n-workflows.md](docs/n8n-workflows.md), including a real charge-execution endpoint
 
 ## Storage and architecture
 - The app now uses a storage adapter boundary so the rest of the app does not depend directly on file-system details.
@@ -99,6 +99,11 @@ See [docs/auth.md](docs/auth.md) for full details, including how to create priva
 - SUPABASE_URL
 - SUPABASE_SERVICE_ROLE_KEY
 - SUPABASE_ANON_KEY (required when AUTH_BACKEND=supabase)
+- STRIPE_SECRET_KEY (test-mode key; required for payment consent / charging to work at all)
+- STRIPE_PUBLISHABLE_KEY (not currently used server-side, kept for parity with a future client-side flow)
+- RESEND_API_KEY (required for `npm run send:reminders` to actually email customers)
+- REMINDER_FROM_EMAIL (defaults to a placeholder sender address)
+- APP_BASE_URL (used to build links inside reminder emails and Stripe Checkout redirects; defaults to `http://localhost:3000`)
 
 For Supabase-backed runs, put these in a local `.env` file:
 ```env
@@ -109,6 +114,7 @@ SUPABASE_SERVICE_ROLE_KEY=
 SUPABASE_ANON_KEY=
 INTERNAL_API_SECRET=
 ADMIN_EMAILS=
+STRIPE_SECRET_KEY=
 ```
 
 ## Supabase commands
@@ -135,20 +141,28 @@ Older $75 / $120 / $200 assumptions are historical only and should not appear in
 - `GET /ready` returns JSON describing whether the selected storage/auth backends and their required env vars are valid for the current environment.
 
 ## Private pilot deployment
-JSON storage and pilot auth are local/dev conveniences only. A real private pilot requires `STORAGE_BACKEND=supabase` and `AUTH_BACKEND=supabase`. n8n, MCP, Shopify, and real Stripe charging are intentionally not enabled. See [docs/deployment.md](docs/deployment.md) for the full checklist, required env vars, and rollback steps.
+JSON storage and pilot auth are local/dev conveniences only. A real private pilot requires `STORAGE_BACKEND=supabase`, `AUTH_BACKEND=supabase`, and a real (test-mode) `STRIPE_SECRET_KEY`. n8n, MCP, and Shopify are intentionally not enabled — only the internal endpoints those tools would call against are implemented server-side. See [docs/deployment.md](docs/deployment.md) for the full checklist, required env vars, and rollback steps.
 
 ## Security model
 Customer data (recipients, milestones, orders, payment consent) is scoped to the authenticated customer, admin routes require an email in `ADMIN_EMAILS`, `/login` and `/admin/login` are rate-limited, and Supabase Row Level Security policies are defined in [supabase/schema.sql](supabase/schema.sql). See [docs/security.md](docs/security.md) for the full model and current limitations.
 
 ## Internal automation endpoints
-These are protected by `INTERNAL_API_SECRET` and return JSON only for trusted automation workflows.
+These are protected by `INTERNAL_API_SECRET` and return JSON only for trusted automation workflows. See [docs/n8n-workflows.md](docs/n8n-workflows.md) for the workflow each one backs.
 
 - GET /internal/orders/upcoming
-- GET /internal/orders/needing-reminder
+- GET /internal/orders/needing-reminder (date-accurate: only returns orders whose reminder date has arrived)
 - GET /internal/orders/needing-florist
 - GET /internal/orders/issues
 - POST /internal/orders/:id/event
 - POST /internal/orders/:id/status
+- POST /internal/orders/:id/charge — attempts a real (test-mode) off-session Stripe charge; idempotent, fails closed to `issue_reported` on any error or missing payment method, and refuses to charge an order whose milestone was paused/cancelled
+
+## Payments and reminders
+
+- **Payment capture**: `/account/payment-consent` starts a Stripe Checkout Session in `setup` mode. The customer enters their card on Stripe's hosted page (never on this app's servers); on return, `/account/payment-consent/complete` stores the real Stripe customer + payment method IDs. Test-mode keys only — see [Stripe's test card numbers](https://stripe.com/docs/testing) for `4242 4242 4242 4242` (success) and `4000 0000 0000 0002` (generic decline).
+- **Charging**: `POST /internal/orders/:id/charge` is meant to be called by a scheduler (cron, or your own polling) once `plannedChargeDate` arrives. It is safe to call repeatedly — already-charged orders are a no-op, and orders whose milestone was paused/cancelled are skipped (and cancelled) instead of charged.
+- **Reminders**: `npm run send:reminders` emails customers via [Resend](https://resend.com) for every order whose reminder date has arrived, then marks the order `pre_charge_reminder_sent`. Requires `RESEND_API_KEY`.
+- Run both on a schedule (cron, a hosted scheduler, or n8n calling the same internal endpoints) — nothing in this repo runs them automatically on its own.
 
 ## Test
 ```bash
@@ -162,11 +176,11 @@ docker run -p 3000:3000 theflowerist
 ```
 
 ## Notes
-- Stripe integration is intentionally scaffolded as a placeholder because the repo does not currently include Stripe infrastructure.
+- Stripe integration is real (Checkout in setup mode + PaymentIntents for charging), restricted to **test-mode keys** — no live key has ever been wired up in this codebase.
 - The default data layer is JSON-backed and suitable for a concierge MVP beta.
 - Supabase is server-side persistence only for now and is not yet wired to public client access.
 - Supabase Auth is available as an optional backend (`AUTH_BACKEND=supabase`); see [docs/auth.md](docs/auth.md). Public sign-up is not enabled - pilot users are created manually in the Supabase dashboard.
 - RLS policies are defined in [supabase/schema.sql](supabase/schema.sql); the app itself still talks to Supabase only via the service-role key (which bypasses RLS) - see [docs/security.md](docs/security.md).
-- n8n endpoints are available for future automation.
+- Internal endpoints back the documented n8n workflows, but n8n itself is not installed or required — call them from any scheduler you like.
 - MCP is intentionally not enabled.
 - External repos are references only for future planning.
