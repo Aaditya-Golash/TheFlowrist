@@ -169,10 +169,12 @@ test('landing page includes key trust copy', async () => {
   assert.equal(response.status, 200);
   assert.match(response.text, /Never forget flowers/i);
   assert.match(response.text, /no weekly subscription/i);
+  assert.match(response.text, /no catalog/i);
   assert.match(response.text, /pause or cancel/i);
   assert.match(response.text, /designer's[- ]choice/i);
   assert.match(response.text, /toronto/i);
   assert.match(response.text, /reminder/i);
+  assert.match(response.text, /see how it works/i);
 });
 
 test('landing page shows current pricing tiers', async () => {
@@ -227,7 +229,11 @@ test('payment page includes no-charge-today copy', async () => {
   assert.equal(response.status, 200);
   assert.match(response.text, /not charged today/i);
   assert.match(response.text, /remind you before/i);
-  assert.match(response.text, /pause before the cutoff/i);
+  // Must say the customer can do BOTH — "pause" alone would misstate what
+  // the product actually supports (milestones can also be cancelled).
+  assert.match(response.text, /pause or cancel before the cutoff/i);
+  assert.match(response.text, /remain server-side/i);
+  assert.match(response.text, /never shown in this interface/i);
   assert.match(response.text, /Payment capture is not enabled in this local pilot build/i);
   assert.match(response.text, /vault-panel/);
 });
@@ -237,6 +243,36 @@ test('dashboard includes add important date CTA', async () => {
   const response = await request('/dashboard');
   assert.equal(response.status, 200);
   assert.match(response.text, /add another important date/i);
+});
+
+test('dashboard empty state invites a first protected date', async () => {
+  resetData();
+  const emptySeed = {
+    users: [{ id: 'cust-empty', name: 'Empty Customer', email: 'empty@example.com', phone: '', marketingEmailConsent: false, marketingSmsConsent: false, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }],
+    recipients: [],
+    milestones: [],
+    orders: [],
+    floristPartners: [],
+    serviceZones: [],
+    paymentConsents: [],
+    orderEvents: [],
+    feedback: [],
+  };
+  const fakeStore = createFakeAsyncStore(emptySeed);
+  setStorageAdapter(fakeStore);
+  setAuthAdapter(createFakeAuthAdapter(emptySeed.users[0]));
+  try {
+    const response = await request('/dashboard');
+    assert.equal(response.status, 200);
+    assert.match(response.text, /no dates protected yet/i);
+    // Thank-you moments are a first-class occasion type, not just birthdays
+    // and anniversaries — the empty state should say so.
+    assert.match(response.text, /thank-you moment/i);
+    assert.match(response.text, /add your first important date/i);
+  } finally {
+    setStorageAdapter(null);
+    resetAuthAdapter();
+  }
 });
 
 test('admin order detail still renders', async () => {
@@ -288,6 +324,41 @@ test('milestone form renders aesthetic mood cards', async () => {
   assert.match(response.text, /Pastel &amp; Eucalyptus|Pastel & Eucalyptus/);
   assert.match(response.text, /Sculptural &amp; Clean|Sculptural & Clean/);
   assert.match(response.text, /Rich &amp; Botanical|Rich & Botanical/);
+  // The mood-card radios and the free-text style textarea must use different
+  // field names, or only the first one (the textarea) is ever submitted,
+  // since browsers submit at most one value per field name.
+  const styleFieldOccurrences = (response.text.match(/name="stylePreferences"/g) || []).length;
+  assert.equal(styleFieldOccurrences, 1, 'stylePreferences should only be used by the free-text field');
+  const moodRadioOccurrences = (response.text.match(/type="radio" name="moodPreset"/g) || []).length;
+  assert.equal(moodRadioOccurrences, 3);
+});
+
+test('selecting an aesthetic mood card actually sets the milestone style preferences', async () => {
+  resetData();
+  const response = await request('/milestones', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'recipientId=recipient-1&eventDate=2027-03-10&budgetTier=classic&occasionType=birthday&stylePreferences=&moodPreset=Sculptural%20%26%20Clean',
+  });
+  assert.equal(response.status, 302);
+  const state = require('../lib/store').getState();
+  const milestone = state.milestones.find((entry) => entry.recipientId === 'recipient-1' && entry.eventDate === '2027-03-10');
+  assert.ok(milestone, 'expected the milestone to be created');
+  assert.equal(milestone.stylePreferences, 'Sculptural & Clean');
+});
+
+test('free-text style preferences take priority over a selected mood card', async () => {
+  resetData();
+  const response = await request('/milestones', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'recipientId=recipient-1&eventDate=2027-04-12&budgetTier=classic&occasionType=birthday&stylePreferences=Bold%20reds%20only&moodPreset=Sculptural%20%26%20Clean',
+  });
+  assert.equal(response.status, 302);
+  const state = require('../lib/store').getState();
+  const milestone = state.milestones.find((entry) => entry.recipientId === 'recipient-1' && entry.eventDate === '2027-04-12');
+  assert.ok(milestone, 'expected the milestone to be created');
+  assert.equal(milestone.stylePreferences, 'Bold reds only');
 });
 
 test('pricing profit remains positive across florist rebate assumptions', () => {
