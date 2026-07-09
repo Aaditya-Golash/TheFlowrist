@@ -53,7 +53,7 @@
 }
 
 html {
-  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
@@ -145,7 +145,7 @@ p {
 
 .luxe-editorial-card {
   display: grid;
-  grid-template-rows: subgrid;
+  grid-template-rows: auto 1fr auto;
   grid-row: span 3;
   background: var(--color-bg-secondary);
   border: 1px solid var(--color-border-parchment);
