@@ -49,9 +49,18 @@
 - Manual approval step: human approves the escalation path
 - Failure fallback: create a support task and keep the order visible in admin operations
 
-## 8. Charge execution (added in Phase 2 — real Stripe charging)
+## 8. Charge execution
 - Trigger: schedule, once an order's `plannedChargeDate` has arrived
 - Internal endpoint: POST /internal/orders/:id/charge
-- Expected payload: `{ ok, orderId, charged, reason? }` — idempotent; already-charged orders and orders whose milestone was paused/cancelled are safely no-ops
-- Manual approval step: none by design — charging on the planned date is the automated step this whole system exists to support; disputes/refunds are handled manually afterward (workflow #7)
-- Failure fallback: a declined card or missing payment method transitions the order to `issue_reported` (visible via workflow #7) rather than silently failing or retrying indefinitely
+- Expected payload: `{ ok, orderId, charged, reason? }`; idempotent. Already-charged orders and orders whose protected date was paused/cancelled are safely no-ops.
+- Manual approval step: none by design. Charging on the planned date is the automated step this whole system exists to support; disputes/refunds are handled manually afterward.
+- Failure fallback: a declined card or missing payment method transitions the order to `issue_reported` rather than silently failing or retrying indefinitely
+
+## 9. Surprise & Delight monthly generation
+- Trigger: monthly schedule
+- Internal endpoint: POST /internal/surprise/generate
+- Optional query: `?month=YYYY-MM` for an explicit generation month
+- Expected payload: `{ ok, month, createdCount, orders }`; idempotent for each setting/month pair
+- Eligibility: active Signature Concierge membership, active monthly setting, not skipped for the target month
+- Manual approval step: concierge reviews generated orders before charge and fulfillment
+- Failure fallback: no charge is created by this endpoint. Missing data simply skips that setting until corrected.

@@ -68,6 +68,11 @@ create table if not exists scheduled_orders (
   milestone_id text references milestones(id) on delete set null,
   event_date date not null,
   planned_charge_date date,
+  reminder_date date,
+  order_source text not null default 'milestone' check (order_source in ('milestone', 'one_time', 'surprise_monthly')),
+  occasion_type text,
+  occasion_label text,
+  surprise_setting_id text,
   budget_tier text not null check (budget_tier in ('classic', 'premium', 'signature')),
   estimated_customer_price_cents integer not null default 0,
   delivery_fee_cents integer not null default 0,
@@ -89,6 +94,56 @@ create table if not exists scheduled_orders (
 -- Migration-safe for pre-existing tables created before Phase 2 (real Stripe charging).
 alter table scheduled_orders add column if not exists stripe_payment_intent_id text;
 alter table scheduled_orders add column if not exists price_override_reason text;
+alter table scheduled_orders add column if not exists reminder_date date;
+alter table scheduled_orders add column if not exists order_source text not null default 'milestone';
+alter table scheduled_orders add column if not exists occasion_type text;
+alter table scheduled_orders add column if not exists occasion_label text;
+alter table scheduled_orders add column if not exists surprise_setting_id text;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'scheduled_orders_order_source_check'
+  ) then
+    alter table scheduled_orders
+      add constraint scheduled_orders_order_source_check
+      check (order_source in ('milestone', 'one_time', 'surprise_monthly'));
+  end if;
+end $$;
+
+create table if not exists relationship_memberships (
+  id text primary key,
+  customer_id text not null references customers(id) on delete cascade,
+  plan_key text not null check (plan_key in ('datekeeper', 'thoughtful', 'signature')),
+  status text not null default 'active' check (status in ('active', 'cancelled', 'expired')),
+  annual_fee_cents integer not null default 0,
+  protected_date_limit integer not null default 3,
+  current_period_start date,
+  current_period_end date,
+  stripe_checkout_session_id text,
+  stripe_payment_intent_id text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists surprise_delight_settings (
+  id text primary key,
+  customer_id text not null references customers(id) on delete cascade,
+  recipient_id text references recipients(id) on delete set null,
+  budget_tier text not null check (budget_tier in ('classic', 'premium', 'signature')),
+  monthly_price_cents integer not null,
+  preferred_delivery_day integer check (preferred_delivery_day between 1 and 28),
+  preferred_delivery_date date,
+  reminder_days_before integer not null default 7,
+  charge_days_before integer not null default 5,
+  status text not null default 'active' check (status in ('active', 'paused', 'cancelled')),
+  skipped_month text,
+  last_generated_month text,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
 
 create table if not exists florist_partners (
   id text primary key,
@@ -158,6 +213,9 @@ create index if not exists idx_scheduled_orders_customer_id on scheduled_orders(
 create index if not exists idx_scheduled_orders_recipient_id on scheduled_orders(recipient_id);
 create index if not exists idx_scheduled_orders_milestone_id on scheduled_orders(milestone_id);
 create index if not exists idx_scheduled_orders_planned_charge_date on scheduled_orders(planned_charge_date);
+create index if not exists idx_scheduled_orders_reminder_date on scheduled_orders(reminder_date);
+create index if not exists idx_scheduled_orders_order_source on scheduled_orders(order_source);
+create index if not exists idx_scheduled_orders_surprise_setting_id on scheduled_orders(surprise_setting_id);
 create index if not exists idx_scheduled_orders_status on scheduled_orders(status);
 create index if not exists idx_scheduled_orders_florist_partner_id on scheduled_orders(florist_partner_id);
 create index if not exists idx_order_event_logs_order_id on order_event_logs(order_id);
@@ -167,6 +225,14 @@ create index if not exists idx_florist_partners_active on florist_partners(activ
 create index if not exists idx_service_zones_active on service_zones(active);
 create index if not exists idx_customers_auth_user_id on customers(auth_user_id);
 create index if not exists idx_feedback_order_id on feedback(order_id);
+create index if not exists idx_relationship_memberships_customer_id on relationship_memberships(customer_id);
+create index if not exists idx_relationship_memberships_status on relationship_memberships(status);
+create index if not exists idx_surprise_delight_settings_customer_id on surprise_delight_settings(customer_id);
+create index if not exists idx_surprise_delight_settings_recipient_id on surprise_delight_settings(recipient_id);
+create index if not exists idx_surprise_delight_settings_status on surprise_delight_settings(status);
+
+grant select, insert, update, delete on relationship_memberships to authenticated;
+grant select, insert, update, delete on surprise_delight_settings to authenticated;
 
 -- =============================================================================
 -- Row Level Security
@@ -180,7 +246,7 @@ create index if not exists idx_feedback_order_id on feedback(order_id);
 --   2. a future client-safe/direct-from-browser Supabase usage has a
 --      correct, tested policy set to build on rather than starting from
 --      "everything is open."
--- Nothing below changes how the app itself behaves — the service role key
+-- Nothing below changes how the app itself behaves. The service role key
 -- is unaffected by RLS. See docs/security.md for the full model.
 
 alter table customers enable row level security;
@@ -189,9 +255,11 @@ alter table milestones enable row level security;
 alter table scheduled_orders enable row level security;
 alter table payment_consents enable row level security;
 alter table feedback enable row level security;
+alter table relationship_memberships enable row level security;
+alter table surprise_delight_settings enable row level security;
 
 -- NOTE: florist_partners, service_zones, and order_event_logs are
--- intentionally left without RLS here — they are internal
+-- intentionally left without RLS here. They are internal
 -- concierge/ops data (or, for order_event_logs, an audit trail tied to
 -- scheduled_orders) rather than customer-owned rows. Review before any
 -- future direct-from-browser access to those tables.
@@ -230,6 +298,26 @@ drop policy if exists payment_consents_owner_access on payment_consents;
 create policy payment_consents_owner_access on payment_consents
   for all using (
     customer_id in (select id from customers where auth_user_id = auth.uid())
+  );
+
+drop policy if exists relationship_memberships_owner_access on relationship_memberships;
+create policy relationship_memberships_owner_access on relationship_memberships
+  for all to authenticated
+  using (
+    customer_id in (select id from customers where auth_user_id = (select auth.uid()))
+  )
+  with check (
+    customer_id in (select id from customers where auth_user_id = (select auth.uid()))
+  );
+
+drop policy if exists surprise_delight_settings_owner_access on surprise_delight_settings;
+create policy surprise_delight_settings_owner_access on surprise_delight_settings
+  for all to authenticated
+  using (
+    customer_id in (select id from customers where auth_user_id = (select auth.uid()))
+  )
+  with check (
+    customer_id in (select id from customers where auth_user_id = (select auth.uid()))
   );
 
 -- feedback: scoped via the order it belongs to (feedback has no customer_id

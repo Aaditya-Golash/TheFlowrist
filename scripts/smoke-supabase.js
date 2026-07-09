@@ -21,19 +21,25 @@ async function runSmoke({ env = process.env, createClient: createClientImpl = cr
   const milestoneId = `smoke-milestone-${Date.now()}`;
   const orderId = `smoke-order-${Date.now()}`;
   const consentId = `smoke-consent-${Date.now()}`;
+  const membershipId = `smoke-membership-${Date.now()}`;
+  const surpriseSettingId = `smoke-surprise-${Date.now()}`;
 
   const customerInsert = { id: customerId, name: 'Smoke Test Customer', email, phone: '+1-555-0100', marketing_email_consent: true, marketing_sms_consent: false };
   const recipientInsert = { id: recipientId, customer_id: customerId, name: 'Smoke Test Recipient', relationship: 'friend', phone: '+1-555-0101', address_line_1: '1 Test Ave', city: 'Toronto', province: 'ON', postal_code: 'M5V 2T6' };
   const milestoneInsert = { id: milestoneId, customer_id: customerId, recipient_id: recipientId, occasion_type: 'birthday', occasion_label: 'Smoke Test', event_date: '2026-08-15', budget_tier: 'classic', status: 'active' };
-  const orderInsert = { id: orderId, customer_id: customerId, recipient_id: recipientId, milestone_id: milestoneId, event_date: '2026-08-15', planned_charge_date: '2026-08-10', budget_tier: 'classic', status: 'scheduled', estimated_customer_price_cents: getPricingTier('classic').customerPriceCents, delivery_fee_cents: 1200 };
+  const orderInsert = { id: orderId, customer_id: customerId, recipient_id: recipientId, milestone_id: milestoneId, event_date: '2026-08-15', planned_charge_date: '2026-08-10', reminder_date: '2026-08-08', order_source: 'milestone', occasion_type: 'birthday', occasion_label: 'Smoke Test', budget_tier: 'classic', status: 'scheduled', estimated_customer_price_cents: getPricingTier('classic').customerPriceCents, delivery_fee_cents: 1200 };
   const eventInsert = { id: `smoke-event-${Date.now()}`, order_id: orderId, type: 'status_change', message: 'Smoke test event', actor_type: 'system' };
   const consentInsert = { id: consentId, customer_id: customerId, consent_text_version: 'v1', active: true };
+  const membershipInsert = { id: membershipId, customer_id: customerId, plan_key: 'signature', status: 'active', annual_fee_cents: 9900, protected_date_limit: 12, current_period_start: '2026-01-01', current_period_end: '2027-01-01' };
+  const surpriseInsert = { id: surpriseSettingId, customer_id: customerId, recipient_id: recipientId, budget_tier: 'classic', monthly_price_cents: 12500, preferred_delivery_day: 15, reminder_days_before: 7, charge_days_before: 5, status: 'active' };
 
   const operations = [
     supabase.from('customers').upsert(customerInsert, { onConflict: 'id' }).select('*'),
     supabase.from('recipients').upsert(recipientInsert, { onConflict: 'id' }).select('*'),
     supabase.from('milestones').upsert(milestoneInsert, { onConflict: 'id' }).select('*'),
     supabase.from('scheduled_orders').upsert(orderInsert, { onConflict: 'id' }).select('*'),
+    supabase.from('relationship_memberships').upsert(membershipInsert, { onConflict: 'id' }).select('*'),
+    supabase.from('surprise_delight_settings').upsert(surpriseInsert, { onConflict: 'id' }).select('*'),
     supabase.from('order_event_logs').upsert(eventInsert, { onConflict: 'id' }).select('*'),
     supabase.from('payment_consents').upsert(consentInsert, { onConflict: 'id' }).select('*'),
   ];
@@ -68,6 +74,8 @@ async function runSmoke({ env = process.env, createClient: createClientImpl = cr
     milestoneId,
     orderId,
     consentId,
+    membershipId,
+    surpriseSettingId,
     updatedOrderStatus: updatedOrder?.[0]?.status || null,
     consentActive: consentData?.[0]?.active ?? null,
     readBackCount: readBack?.length || 0,

@@ -1,7 +1,7 @@
 # TheFlowerist
 
 This is a concierge MVP.
-Real Stripe payment capture and charging, in Stripe **test mode** only — no live keys are wired up.
+Real Stripe payment capture and charging, in Stripe **test mode** only. No live keys are wired up.
 No Shopify automation yet.
 No Playwright automation yet.
 JSON storage is temporary.
@@ -11,13 +11,29 @@ TheFlowerist is a concierge-first MVP for milestone flower gifting. The current 
 
 ## What is included
 - landing page and customer dashboard
-- recipient and milestone creation
-- scheduled order generation from milestones
+- recipient and protected-date creation through Free Datekeeper
+- one-time concierge order flow at `/orders/new`
+- annual relationship plan selection at `/plans`
+- Signature-only Surprise & Delight Monthly settings at `/surprise`
+- scheduled order generation from protected dates, one-time orders, and monthly gestures
 - admin dashboard and manual order management
 - basic service zone and florist partner data
-- real payment method capture via Stripe Checkout (setup mode) and real off-session charging via Stripe PaymentIntents — test-mode keys only
+- real payment method capture via Stripe Checkout (setup mode) and real off-session charging via Stripe PaymentIntents. Test-mode keys only
 - a storage adapter boundary for future Supabase migration
 - internal JSON endpoints backing the documented n8n workflows in [docs/n8n-workflows.md](docs/n8n-workflows.md), including a real charge-execution endpoint
+
+## Product model
+
+TheFlowerist now supports four pilot offers:
+
+- **Arrange one delivery**: a signed-in customer creates a one-time concierge order at `/orders/new`. Delivery dates must be at least 7 days out.
+- **Free Datekeeper**: the saved-date layer. It protects up to 3 dates per year for free and creates milestone-sourced scheduled orders.
+- **Relationship plans**: annual memory and concierge plans at `/plans`. Paid plans use Stripe Checkout in `payment` mode, still in test mode, and do not create Stripe subscriptions.
+- **Surprise & Delight Monthly**: an optional monthly gesture generator for active Signature Concierge members. It creates scheduled orders only, sends reminders before charge, and never represents weekly flowers or random charges.
+
+Membership buys the memory and concierge layer. Flowers are still charged per delivery.
+
+The hybrid offer should be validated as a staged pivot, not treated as a finished scale model. See [docs/pivot-validation.md](docs/pivot-validation.md) for the pilot metrics, persona assumptions, unit economics, and stage-gate checks to run before adding more automation or live payments.
 
 ## Storage and architecture
 - The app now uses a storage adapter boundary so the rest of the app does not depend directly on file-system details.
@@ -141,7 +157,7 @@ Older $75 / $120 / $200 assumptions are historical only and should not appear in
 - `GET /ready` returns JSON describing whether the selected storage/auth backends and their required env vars are valid for the current environment.
 
 ## Private pilot deployment
-JSON storage and pilot auth are local/dev conveniences only. A real private pilot requires `STORAGE_BACKEND=supabase`, `AUTH_BACKEND=supabase`, and a real (test-mode) `STRIPE_SECRET_KEY`. n8n, MCP, and Shopify are intentionally not enabled — only the internal endpoints those tools would call against are implemented server-side. See [docs/deployment.md](docs/deployment.md) for the full checklist, required env vars, and rollback steps.
+JSON storage and pilot auth are local/dev conveniences only. A real private pilot requires `STORAGE_BACKEND=supabase`, `AUTH_BACKEND=supabase`, and a real test-mode `STRIPE_SECRET_KEY`. n8n, MCP, and Shopify are intentionally not enabled. Only the internal endpoints those tools would call against are implemented server-side. See [docs/deployment.md](docs/deployment.md) for the full checklist, required env vars, and rollback steps.
 
 ## Security model
 Customer data (recipients, milestones, orders, payment consent) is scoped to the authenticated customer, admin routes require an email in `ADMIN_EMAILS`, `/login` and `/admin/login` are rate-limited, and Supabase Row Level Security policies are defined in [supabase/schema.sql](supabase/schema.sql). See [docs/security.md](docs/security.md) for the full model and current limitations.
@@ -155,14 +171,16 @@ These are protected by `INTERNAL_API_SECRET` and return JSON only for trusted au
 - GET /internal/orders/issues
 - POST /internal/orders/:id/event
 - POST /internal/orders/:id/status
-- POST /internal/orders/:id/charge — attempts a real (test-mode) off-session Stripe charge; idempotent, fails closed to `issue_reported` on any error or missing payment method, and refuses to charge an order whose milestone was paused/cancelled
+- POST /internal/orders/:id/charge: attempts a real test-mode off-session Stripe charge; idempotent, fails closed to `issue_reported` on any error or missing payment method, and refuses to charge an order whose protected date was paused/cancelled
+- POST /internal/surprise/generate: creates eligible Surprise & Delight monthly scheduled orders for active Signature members; idempotent by target month and protected by `INTERNAL_API_SECRET`
 
 ## Payments and reminders
 
-- **Payment capture**: `/account/payment-consent` starts a Stripe Checkout Session in `setup` mode. The customer enters their card on Stripe's hosted page (never on this app's servers); on return, `/account/payment-consent/complete` stores the real Stripe customer + payment method IDs. Test-mode keys only — see [Stripe's test card numbers](https://stripe.com/docs/testing) for `4242 4242 4242 4242` (success) and `4000 0000 0000 0002` (generic decline).
-- **Charging**: `POST /internal/orders/:id/charge` is meant to be called by a scheduler (cron, or your own polling) once `plannedChargeDate` arrives. It is safe to call repeatedly — already-charged orders are a no-op, and orders whose milestone was paused/cancelled are skipped (and cancelled) instead of charged.
+- **Payment capture**: `/account/payment-consent` starts a Stripe Checkout Session in `setup` mode. The customer enters their card on Stripe's hosted page, never on this app's servers. On return, `/account/payment-consent/complete` stores the real Stripe customer + payment method IDs. Test-mode keys only. See [Stripe's test card numbers](https://stripe.com/docs/testing) for `4242 4242 4242 4242` (success) and `4000 0000 0000 0002` (generic decline).
+- **Annual plan checkout**: `/plans` uses Stripe Checkout in `payment` mode for paid annual membership fees only. It does not use Stripe subscriptions.
+- **Charging**: `POST /internal/orders/:id/charge` is meant to be called by a scheduler (cron, or your own polling) once `plannedChargeDate` arrives. It is safe to call repeatedly. Already-charged orders are a no-op, and orders whose protected date was paused/cancelled are skipped and cancelled instead of charged.
 - **Reminders**: `npm run send:reminders` emails customers via [Resend](https://resend.com) for every order whose reminder date has arrived, then marks the order `pre_charge_reminder_sent`. Requires `RESEND_API_KEY`.
-- Run both on a schedule (cron, a hosted scheduler, or n8n calling the same internal endpoints) — nothing in this repo runs them automatically on its own.
+- Run charging, reminders, and Surprise & Delight generation on a schedule. Nothing in this repo runs them automatically on its own.
 
 ## Test
 ```bash
@@ -176,11 +194,11 @@ docker run -p 3000:3000 theflowerist
 ```
 
 ## Notes
-- Stripe integration is real (Checkout in setup mode + PaymentIntents for charging), restricted to **test-mode keys** — no live key has ever been wired up in this codebase.
+- Stripe integration is real (Checkout in setup/payment mode + PaymentIntents for charging), restricted to **test-mode keys**. No live key has ever been wired up in this codebase.
 - The default data layer is JSON-backed and suitable for a concierge MVP beta.
 - Supabase is server-side persistence only for now and is not yet wired to public client access.
 - Supabase Auth is available as an optional backend (`AUTH_BACKEND=supabase`); see [docs/auth.md](docs/auth.md). Public sign-up is not enabled - pilot users are created manually in the Supabase dashboard.
 - RLS policies are defined in [supabase/schema.sql](supabase/schema.sql); the app itself still talks to Supabase only via the service-role key (which bypasses RLS) - see [docs/security.md](docs/security.md).
-- Internal endpoints back the documented n8n workflows, but n8n itself is not installed or required — call them from any scheduler you like.
+- Internal endpoints back documented automation workflows, but n8n itself is not installed or required. Call them from any scheduler you like.
 - MCP is intentionally not enabled.
 - External repos are references only for future planning.

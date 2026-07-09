@@ -4,12 +4,14 @@ This document covers who can see what, how admin access works, and what's still 
 
 ## Customer data scoping
 
-Every customer-facing route (`/dashboard`, `/recipients/new`, `/milestones/new`, `/account`, `/account/payment-consent`) resolves the current customer via the active auth adapter (`getAuthAdapter().requireUser(req, res)`), then scopes what it reads and writes to that customer's own records:
+Every customer-facing route (`/dashboard`, `/orders/new`, `/recipients/new`, `/milestones/new`, `/plans`, `/surprise`, `/account`, `/account/payment-consent`) resolves the current customer via the active auth adapter (`getAuthAdapter().requireUser(req, res)`), then scopes what it reads and writes to that customer's own records:
 
 - The dashboard filters recipients, milestones, and orders to `record.userId === customer.id`.
 - The account/payment-consent pages filter payment consents the same way.
 - Creating a recipient attaches `userId: customer.id` directly.
-- Creating a milestone requires the chosen recipient to belong to the current customer (`assertCustomerOwnsRecipient`) - rejected with `403` otherwise.
+- Creating a one-time order with a saved recipient requires that recipient to belong to the current customer.
+- Creating a protected date requires the chosen recipient to belong to the current customer (`assertCustomerOwnsRecipient`) - rejected with `403` otherwise.
+- Plan memberships and Surprise & Delight settings are created with the current customer ID and filtered by that same ID.
 - Pausing/cancelling/reactivating a milestone requires the milestone to belong to the current customer (`assertCustomerOwnsMilestone`) - a mismatched ID returns `404` (not `403`), so we don't confirm to an attacker that another customer's record exists.
 - Revoking a payment consent by ID requires it to belong to the current customer, same `404` treatment.
 
@@ -50,7 +52,7 @@ This is exercised by a test using a hand-written fake async storage adapter (`cr
 
 ## Supabase Row Level Security (RLS)
 
-[supabase/schema.sql](../supabase/schema.sql) enables RLS and adds ownership policies on `customers`, `recipients`, `milestones`, `scheduled_orders`, `payment_consents`, and `feedback`, keyed off a new `customers.auth_user_id` column mapped to the Supabase Auth user (`auth.uid()`).
+[supabase/schema.sql](../supabase/schema.sql) enables RLS and adds ownership policies on `customers`, `recipients`, `milestones`, `scheduled_orders`, `payment_consents`, `relationship_memberships`, `surprise_delight_settings`, and `feedback`, keyed off a new `customers.auth_user_id` column mapped to the Supabase Auth user (`auth.uid()`).
 
 **Why this matters even though the app only uses the service-role key today**: the service role key bypasses RLS entirely, so the app itself is unaffected either way. But `SUPABASE_ANON_KEY` is a public/client-safe key this app already ships (for Supabase Auth session handling), and with RLS off, anyone holding it could read or write every row in every table directly via PostgREST - completely bypassing the app's own route guards and ownership checks documented above. Enabling RLS closes that door regardless of what the app does today, and gives any future client-safe/direct-from-browser Supabase usage a correct policy set to build on instead of starting from "everything is open."
 

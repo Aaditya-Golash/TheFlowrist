@@ -18,6 +18,7 @@ const { setStripeClient, resetStripeClient } = require('../lib/stripe-client');
 const {
   calculatePlannedChargeDate,
   createScheduledOrderFromMilestone,
+  getOrdersNeedingReminder,
   getServiceZoneForPostalCode,
   isPostalCodeInZone,
   calculateEstimatedPrice,
@@ -121,6 +122,12 @@ function createFakeAsyncStore(seed) {
     async getScheduledOrderById(id) { return tick(state.orders.find((entry) => entry.id === id) || null); },
     async createScheduledOrder(order) { state.orders.push(order); return tick(order); },
     async updateScheduledOrder(id, changes) { return tick(findAndUpdate(state.orders, id, changes)); },
+    async listRelationshipMemberships() { return tick(state.relationshipMemberships || []); },
+    async createRelationshipMembership(membership) { state.relationshipMemberships = state.relationshipMemberships || []; state.relationshipMemberships.push(membership); return tick(membership); },
+    async updateRelationshipMembership(id, changes) { state.relationshipMemberships = state.relationshipMemberships || []; return tick(findAndUpdate(state.relationshipMemberships, id, changes)); },
+    async listSurpriseDelightSettings() { return tick(state.surpriseDelightSettings || []); },
+    async createSurpriseDelightSetting(setting) { state.surpriseDelightSettings = state.surpriseDelightSettings || []; state.surpriseDelightSettings.push(setting); return tick(setting); },
+    async updateSurpriseDelightSetting(id, changes) { state.surpriseDelightSettings = state.surpriseDelightSettings || []; return tick(findAndUpdate(state.surpriseDelightSettings, id, changes)); },
     async createOrderEventLog(event) { state.orderEvents.push(event); return tick(event); },
     async listOrderEventLogs(orderId) { return tick(state.orderEvents.filter((entry) => entry.orderId === orderId)); },
     async listPaymentConsents() { return tick(state.paymentConsents); },
@@ -171,6 +178,8 @@ const TWO_CUSTOMER_SEED = {
     { id: 'consent-a', userId: 'cust-a', stripeCustomerId: '', stripePaymentMethodId: '', consentTextVersion: 'v1', consentTextSnapshot: 'Consent A', consentedAt: '2026-01-04T00:00:00.000Z', ipAddress: '', userAgent: '', active: true },
     { id: 'consent-b', userId: 'cust-b', stripeCustomerId: '', stripePaymentMethodId: '', consentTextVersion: 'v1', consentTextSnapshot: 'Consent B', consentedAt: '2026-01-04T00:00:00.000Z', ipAddress: '', userAgent: '', active: true },
   ],
+  relationshipMemberships: [],
+  surpriseDelightSettings: [],
   orderEvents: [],
   feedback: [],
 };
@@ -178,6 +187,36 @@ const TWO_CUSTOMER_SEED = {
 const getSetCookies = (headers) => (
   typeof headers.getSetCookie === 'function' ? headers.getSetCookie() : [headers.get('set-cookie') || '']
 );
+
+function extractAttributeValues(html, attributeName) {
+  const pattern = new RegExp(`${attributeName}="([^"]+)"`, 'gi');
+  return [...html.matchAll(pattern)].map((match) => match[1]);
+}
+
+function extractForms(html) {
+  return [...html.matchAll(/<form\b([^>]*)>([\s\S]*?)<\/form>/gi)].map((match) => ({
+    attributes: match[1],
+    body: match[2],
+    action: /action="([^"]+)"/i.exec(match[1])?.[1] || '',
+    method: (/method="([^"]+)"/i.exec(match[1])?.[1] || 'get').toLowerCase(),
+  }));
+}
+
+function localUiTarget(value) {
+  if (!value || value.startsWith('#') || value.startsWith('mailto:') || value.startsWith('tel:')) {
+    return null;
+  }
+  if (/^https?:\/\//i.test(value)) {
+    return null;
+  }
+  return value.startsWith('/') ? value : `/${value}`;
+}
+
+function futureDate(daysOut) {
+  const date = new Date();
+  date.setDate(date.getDate() + daysOut);
+  return date.toISOString().slice(0, 10);
+}
 
 test('health endpoint returns ok', async () => {
   resetData();
@@ -202,6 +241,8 @@ test('landing page includes key trust copy', async () => {
   const response = await request('/');
   assert.equal(response.status, 200);
   assert.match(response.text, /Never forget flowers/i);
+  assert.match(response.text, /Arrange one delivery/i);
+  assert.match(response.text, /Protect future dates/i);
   assert.match(response.text, /no weekly subscription/i);
   assert.match(response.text, /pause or cancel/i);
   assert.match(response.text, /designer's[- ]choice/i);
@@ -255,13 +296,202 @@ test('global CSS is served from public assets', async () => {
   assert.doesNotMatch(response.text, /Ãƒ|Ã‚|Ã¢|Ã¯Â¿Â½|ï¿½/);
 });
 
+test('global CSS keeps the responsive UI contract browser-compatible', async () => {
+  resetData();
+  const response = await request('/public/styles.css');
+  assert.equal(response.status, 200);
+  assert.match(response.text, /@media\s*\(max-width:\s*720px\)/);
+  assert.match(response.text, /\.hero/);
+  assert.match(response.text, /\.nav-links/);
+  assert.match(response.text, /\.form-card/);
+  assert.match(response.text, /\.data-table/);
+  assert.match(response.text, /\.btn-primary/);
+  assert.doesNotMatch(response.text, /grid-template-rows:\s*subgrid/);
+  assert.doesNotMatch(response.text, /-webkit-text-size-adjust/);
+});
+
+test('core UI pages load the shared shell, stylesheet, and viewport metadata', async () => {
+  resetData();
+  const pages = ['/', '/login', '/dashboard', '/orders/new', '/recipients/new', '/milestones/new', '/plans', '/account', '/account/payment-consent', '/admin/login'];
+  for (const page of pages) {
+    const response = await request(page);
+    assert.equal(response.status, 200, `${page} should render`);
+    assert.match(response.text, /<meta name="viewport" content="width=device-width, initial-scale=1"/, `${page} needs responsive viewport metadata`);
+    assert.match(response.text, /href="\/public\/styles\.css"/, `${page} needs global stylesheet`);
+    assert.match(response.text, /class="site-header"/, `${page} needs shared header`);
+    assert.match(response.text, /TheFlowerist/, `${page} should carry the brand`);
+  }
+});
+
+test('visible local links and CTAs on core pages resolve without broken destinations', async () => {
+  resetData();
+  const pages = ['/', '/dashboard', '/orders/new', '/recipients/new', '/milestones/new', '/plans', '/account', '/account/payment-consent', '/admin/login'];
+  const expectedTargets = new Set();
+  for (const page of pages) {
+    const response = await request(page);
+    assert.equal(response.status, 200);
+    extractAttributeValues(response.text, 'href')
+      .map(localUiTarget)
+      .filter(Boolean)
+      .forEach((target) => expectedTargets.add(target));
+  }
+
+  assert.ok(expectedTargets.has('/orders/new'), 'landing CTA should expose one-time order flow');
+  assert.ok(expectedTargets.has('/milestones/new'), 'landing CTA should expose protected date flow');
+  assert.ok(expectedTargets.has('/plans'), 'navigation should expose relationship plans');
+  assert.ok(expectedTargets.has('/surprise'), 'navigation should expose Surprise & Delight');
+  assert.ok(expectedTargets.has('/account/payment-consent'), 'account should expose payment consent');
+
+  for (const target of expectedTargets) {
+    const response = await request(target);
+    assert.notEqual(response.status, 404, `${target} should not be a broken link`);
+    assert.ok(response.status < 500, `${target} should not crash`);
+  }
+});
+
+test('forms on user-facing pages have submit controls and in-app destinations', async () => {
+  resetData();
+  const pages = ['/', '/login', '/dashboard', '/orders/new', '/recipients/new', '/milestones/new', '/plans', '/account', '/account/payment-consent', '/admin/login'];
+  const forms = [];
+  for (const page of pages) {
+    const response = await request(page);
+    assert.equal(response.status, 200);
+    extractForms(response.text).forEach((form) => forms.push({ ...form, page }));
+  }
+
+  assert.ok(forms.length >= 8, 'core pages should expose expected interactive forms');
+  for (const form of forms) {
+    assert.ok(form.action, `${form.page} has a form without an action`);
+    assert.match(form.method, /^(get|post)$/);
+    assert.match(form.body, /<button\b|<input[^>]+type="submit"/i, `${form.page} form ${form.action} needs a submit control`);
+    assert.ok(localUiTarget(form.action), `${form.page} form ${form.action} should stay inside the app`);
+  }
+});
+
+test('primary customer UI flows can be clicked through with valid form submissions', async () => {
+  resetData();
+
+  const recipientResponse = await request('/recipients', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      name: 'UI Test Recipient',
+      relationship: 'Friend',
+      addressLine1: '123 King St W',
+      city: 'Toronto',
+      province: 'ON',
+      postalCode: 'M5V2T6',
+      deliveryInstructions: 'Front desk',
+    }).toString(),
+  });
+  assert.equal(recipientResponse.status, 302);
+  assert.match(recipientResponse.headers.get('location') || '', /\/dashboard/);
+
+  const milestoneResponse = await request('/milestones', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      recipientId: 'recipient-1',
+      occasionType: 'birthday',
+      eventDate: futureDate(40),
+      repeatsAnnually: 'on',
+      budgetTier: 'classic',
+      cardMessageTone: 'warm',
+      stylePreferences: 'Pastel & Eucalyptus',
+      status: 'active',
+    }).toString(),
+  });
+  assert.equal(milestoneResponse.status, 302);
+  assert.match(milestoneResponse.headers.get('location') || '', /\/dashboard/);
+
+  const orderResponse = await request('/orders', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      recipientId: 'recipient-1',
+      occasionType: 'thank_you',
+      occasionLabel: 'A thoughtful thank-you',
+      eventDate: futureDate(21),
+      budgetTier: 'premium',
+      cardMessageTone: 'warm',
+      stylePreferences: 'Sculptural & Clean',
+      customerNotes: 'Keep the note concise.',
+    }).toString(),
+  });
+  assert.equal(orderResponse.status, 302);
+  assert.match(orderResponse.headers.get('location') || '', /\/dashboard\?order=created/);
+
+  const planResponse = await request('/plans/select', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'planKey=datekeeper',
+  });
+  assert.equal(planResponse.status, 302);
+  assert.match(planResponse.headers.get('location') || '', /\/plans\?plan=active/);
+
+  const dashboardResponse = await request('/dashboard');
+  assert.equal(dashboardResponse.status, 200);
+  assert.match(dashboardResponse.text, /UI Test Recipient/);
+  assert.match(dashboardResponse.text, /A thoughtful thank-you/);
+});
+
+test('dashboard action buttons pause and reactivate a protected date through the UI forms', async () => {
+  resetData();
+  const pauseResponse = await request('/milestones/milestone-1', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'action=pause',
+  });
+  assert.equal(pauseResponse.status, 302);
+
+  const pausedDashboard = await request('/dashboard');
+  assert.equal(pausedDashboard.status, 200);
+  assert.match(pausedDashboard.text, /Reactivate/);
+
+  const reactivateResponse = await request('/milestones/milestone-1', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'action=reactivate',
+  });
+  assert.equal(reactivateResponse.status, 302);
+
+  const activeDashboard = await request('/dashboard');
+  assert.equal(activeDashboard.status, 200);
+  assert.match(activeDashboard.text, /Pause/);
+});
+
+test('admin login UI sets a cookie and unlocks admin navigation destinations', async () => {
+  resetData();
+  const loginResponse = await request('/admin/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'email=admin@example.com',
+  });
+  assert.equal(loginResponse.status, 302);
+  const adminCookie = getSetCookies(loginResponse.headers).find((cookie) => /adminEmail=/.test(cookie));
+  assert.ok(adminCookie);
+
+  const adminResponse = await request('/admin', {
+    headers: { cookie: adminCookie },
+  });
+  assert.equal(adminResponse.status, 200);
+  assert.match(adminResponse.text, /View orders/);
+  assert.match(adminResponse.text, /Manage florists/);
+  assert.match(adminResponse.text, /Manage zones/);
+
+  for (const target of ['/admin/orders', '/admin/florists', '/admin/zones']) {
+    const response = await request(target, { headers: { cookie: adminCookie } });
+    assert.equal(response.status, 200, `${target} should be reachable after admin login`);
+  }
+});
+
 test('payment page includes no-charge-today copy', async () => {
   resetData();
   const response = await request('/account/payment-consent');
   assert.equal(response.status, 200);
   assert.match(response.text, /not charged today/i);
   assert.match(response.text, /remind you before/i);
-  // Must say the customer can do BOTH — "pause" alone would misstate what
+  // Must say the customer can do both. "Pause" alone would misstate what
   // the product actually supports (milestones can also be cancelled).
   assert.match(response.text, /pause or cancel before the cutoff/i);
   assert.match(response.text, /remain server-side/i);
@@ -281,6 +511,252 @@ test('dashboard includes add important date CTA', async () => {
   const response = await request('/dashboard');
   assert.equal(response.status, 200);
   assert.match(response.text, /add another important date/i);
+  assert.match(response.text, /Scheduled orders/i);
+});
+
+test('one-time order page renders for signed-in pilot users', async () => {
+  resetData();
+  const response = await request('/orders/new');
+  assert.equal(response.status, 200);
+  assert.match(response.text, /Arrange one delivery/i);
+  assert.match(response.text, /at least 7 days/i);
+});
+
+test('one-time order creates inline recipient and non-milestone scheduled order', async () => {
+  resetData();
+  const eventDate = new Date();
+  eventDate.setDate(eventDate.getDate() + 14);
+  const body = new URLSearchParams({
+    recipientName: 'Leah Park',
+    relationship: 'Friend',
+    addressLine1: '10 Queen St W',
+    city: 'Toronto',
+    province: 'ON',
+    postalCode: 'M5V2T6',
+    occasionType: 'thank_you',
+    occasionLabel: 'Thank-you for Leah',
+    eventDate: eventDate.toISOString().slice(0, 10),
+    budgetTier: 'classic',
+    cardMessageTone: 'warm',
+    stylePreferences: 'Pastel & Eucalyptus',
+    customerNotes: 'Keep it quiet and refined.',
+  });
+  const response = await request('/orders', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+  });
+  assert.equal(response.status, 302);
+  const state = require('../lib/store').getState();
+  const recipient = state.recipients.find((entry) => entry.name === 'Leah Park');
+  assert.ok(recipient);
+  const order = state.orders.find((entry) => entry.recipientId === recipient.id && entry.orderSource === 'one_time');
+  assert.ok(order);
+  assert.equal(order.milestoneId, null);
+  assert.equal(order.occasionType, 'thank_you');
+  assert.ok(order.reminderDate);
+});
+
+test('one-time order rejects delivery dates with less than seven days of lead time', async () => {
+  resetData();
+  const eventDate = new Date();
+  eventDate.setDate(eventDate.getDate() + 3);
+  const body = new URLSearchParams({
+    recipientId: 'recipient-1',
+    occasionType: 'birthday',
+    eventDate: eventDate.toISOString().slice(0, 10),
+    budgetTier: 'classic',
+    stylePreferences: 'Sculptural & Clean',
+  });
+  const response = await request('/orders', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+  });
+  assert.equal(response.status, 400);
+  assert.match(response.text, /at least 7 days/i);
+});
+
+test('relationship plans render free and paid annual tiers', async () => {
+  resetData();
+  const response = await request('/plans');
+  assert.equal(response.status, 200);
+  assert.match(response.text, /Free Datekeeper/i);
+  assert.match(response.text, /\$49\/year/);
+  assert.match(response.text, /\$99\/year/);
+  assert.match(response.text, /flowers/i);
+});
+
+test('free plan activation does not call Stripe', async () => {
+  resetData();
+  setStripeClient({
+    checkout: {
+      sessions: {
+        async create() { throw new Error('Stripe should not be called for the free plan'); },
+      },
+    },
+  });
+  const response = await request('/plans/select', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'planKey=datekeeper',
+  });
+  assert.equal(response.status, 302);
+  const state = require('../lib/store').getState();
+  assert.ok(state.relationshipMemberships.some((entry) => entry.planKey === 'datekeeper' && entry.status === 'active'));
+});
+
+test('paid plan selection creates a Stripe Checkout payment session', async () => {
+  resetData();
+  let checkoutParams = null;
+  setStripeClient({
+    checkout: {
+      sessions: {
+        async create(params) {
+          checkoutParams = params;
+          return { id: 'cs_plan', url: 'https://checkout.stripe.com/pay/cs_plan' };
+        },
+      },
+    },
+  });
+  const response = await request('/plans/select', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'planKey=thoughtful',
+  });
+  assert.equal(response.status, 302);
+  assert.equal(response.headers.get('location'), 'https://checkout.stripe.com/pay/cs_plan');
+  assert.equal(checkoutParams.mode, 'payment');
+  assert.equal(checkoutParams.line_items[0].price_data.unit_amount, 4900);
+  assert.equal(checkoutParams.line_items[0].price_data.currency, 'cad');
+});
+
+test('plan completion activates membership only when Checkout reports paid', async () => {
+  resetData();
+  setStripeClient({
+    checkout: {
+      sessions: {
+        async retrieve(id) {
+          return { id, payment_status: 'paid', payment_intent: 'pi_plan' };
+        },
+      },
+    },
+  });
+  const response = await request('/plans/complete?session_id=cs_paid&plan=signature');
+  assert.equal(response.status, 302);
+  const state = require('../lib/store').getState();
+  const membership = state.relationshipMemberships.find((entry) => entry.planKey === 'signature' && entry.stripeCheckoutSessionId === 'cs_paid');
+  assert.ok(membership);
+  assert.equal(membership.annualFeeCents, 9900);
+});
+
+test('unpaid plan completion does not activate membership', async () => {
+  resetData();
+  setStripeClient({
+    checkout: {
+      sessions: {
+        async retrieve(id) {
+          return { id, payment_status: 'unpaid' };
+        },
+      },
+    },
+  });
+  const response = await request('/plans/complete?session_id=cs_unpaid&plan=signature');
+  assert.equal(response.status, 302);
+  const state = require('../lib/store').getState();
+  assert.ok(!state.relationshipMemberships.some((entry) => entry.stripeCheckoutSessionId === 'cs_unpaid'));
+});
+
+test('surprise monthly settings are gated to Signature members', async () => {
+  resetData();
+  const response = await request('/surprise');
+  assert.equal(response.status, 403);
+  assert.match(response.text, /Signature Concierge/i);
+});
+
+test('signature users can save surprise settings and generator creates one order per month', async () => {
+  resetData();
+  const adapter = getStorageAdapter();
+  adapter.createRelationshipMembership({
+    id: 'membership-signature-test',
+    userId: 'user-1',
+    planKey: 'signature',
+    status: 'active',
+    annualFeeCents: 9900,
+    protectedDateLimit: 12,
+    currentPeriodStart: '2026-01-01',
+    currentPeriodEnd: '2027-01-01',
+    stripeCheckoutSessionId: 'cs_test',
+    stripePaymentIntentId: 'pi_test',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  });
+  const page = await request('/surprise');
+  assert.equal(page.status, 200);
+  const saveResponse = await request('/surprise/settings', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'recipientId=recipient-1&budgetTier=classic&preferredDeliveryDay=15&notes=Seasonal',
+  });
+  assert.equal(saveResponse.status, 302);
+  const generateResponse = await request('/internal/surprise/generate?month=2026-10', {
+    method: 'POST',
+    headers: { 'x-internal-api-secret': 'test-secret' },
+  });
+  assert.equal(generateResponse.status, 200);
+  const payload = JSON.parse(generateResponse.text);
+  assert.equal(payload.createdCount, 1);
+  const duplicateResponse = await request('/internal/surprise/generate?month=2026-10', {
+    method: 'POST',
+    headers: { 'x-internal-api-secret': 'test-secret' },
+  });
+  assert.equal(JSON.parse(duplicateResponse.text).createdCount, 0);
+  const state = require('../lib/store').getState();
+  assert.ok(state.orders.some((entry) => entry.orderSource === 'surprise_monthly' && entry.eventDate.startsWith('2026-10')));
+});
+
+test('surprise skipped month prevents generation', async () => {
+  resetData();
+  const adapter = getStorageAdapter();
+  adapter.createRelationshipMembership({
+    id: 'membership-signature-skip',
+    userId: 'user-1',
+    planKey: 'signature',
+    status: 'active',
+    annualFeeCents: 9900,
+    protectedDateLimit: 12,
+    currentPeriodStart: '2026-01-01',
+    currentPeriodEnd: '2027-01-01',
+    stripeCheckoutSessionId: 'cs_test',
+    stripePaymentIntentId: 'pi_test',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  });
+  adapter.createSurpriseDelightSetting({
+    id: 'surprise-skip-test',
+    userId: 'user-1',
+    recipientId: 'recipient-1',
+    budgetTier: 'classic',
+    monthlyPriceCents: 12500,
+    preferredDeliveryDay: 15,
+    preferredDeliveryDate: '',
+    reminderDaysBefore: 7,
+    chargeDaysBefore: 5,
+    status: 'active',
+    skippedMonth: '2026-11',
+    lastGeneratedMonth: '',
+    notes: '',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  });
+  const response = await request('/internal/surprise/generate?month=2026-11', {
+    method: 'POST',
+    headers: { 'x-internal-api-secret': 'test-secret' },
+  });
+  assert.equal(response.status, 200);
+  assert.equal(JSON.parse(response.text).createdCount, 0);
+  const state = require('../lib/store').getState();
+  assert.ok(!state.orders.some((entry) => entry.surpriseSettingId === 'surprise-skip-test'));
 });
 
 test('admin order detail still renders', async () => {
@@ -373,6 +849,19 @@ test('scheduled orders are created from milestones with charge date and pricing'
   assert.equal(order.status, 'scheduled');
   assert.equal(order.plannedChargeDate, '2026-08-10');
   assert.equal(order.estimatedCustomerPriceCents, 27500);
+  assert.equal(order.orderSource, 'milestone');
+  assert.equal(order.reminderDate, '2026-08-08');
+});
+
+test('reminder logic supports non-milestone orders with explicit reminder dates', () => {
+  resetData();
+  const orders = [
+    { id: 'one-time-due', status: 'scheduled', milestoneId: null, reminderDate: '2026-01-01', eventDate: '2026-01-10' },
+    { id: 'one-time-future', status: 'scheduled', milestoneId: null, reminderDate: '2999-01-01', eventDate: '2999-01-10' },
+    { id: 'already-reminded', status: 'pre_charge_reminder_sent', milestoneId: null, reminderDate: '2026-01-01', eventDate: '2026-01-10' },
+  ];
+  const due = getOrdersNeedingReminder(orders, []);
+  assert.deepEqual(due.map((entry) => entry.id), ['one-time-due']);
 });
 
 test('postal code normalization and annual occurrence helpers work', () => {
@@ -582,6 +1071,12 @@ test('supabase adapter exports the expected interface', () => {
     'getScheduledOrderById',
     'createScheduledOrder',
     'updateScheduledOrder',
+    'listRelationshipMemberships',
+    'createRelationshipMembership',
+    'updateRelationshipMembership',
+    'listSurpriseDelightSettings',
+    'createSurpriseDelightSetting',
+    'updateSurpriseDelightSetting',
     'createOrderEventLog',
     'listOrderEventLogs',
     'listPaymentConsents',
@@ -595,6 +1090,54 @@ test('supabase adapter exports the expected interface', () => {
   requiredMethods.forEach((method) => {
     assert.equal(typeof adapter[method], 'function');
   });
+});
+
+test('supabase adapter treats newly-added optional tables as empty when migration is not applied', async () => {
+  const rowsByTable = {
+    customers: [],
+    recipients: [],
+    milestones: [],
+    scheduled_orders: [],
+    florist_partners: [],
+    service_zones: [],
+    payment_consents: [],
+    order_event_logs: [],
+    feedback: [],
+  };
+  const missingTableError = { code: 'PGRST205', message: "Could not find the table 'public.relationship_memberships' in the schema cache" };
+  const createQuery = (table) => ({
+    order() { return this; },
+    eq() { return this; },
+    filter() { return this; },
+    limit() { return this; },
+    then(resolve) {
+      if (table === 'relationship_memberships' || table === 'surprise_delight_settings') {
+        return Promise.resolve(resolve({ data: null, error: missingTableError }));
+      }
+      return Promise.resolve(resolve({ data: rowsByTable[table] || [], error: null }));
+    },
+  });
+  const adapter = createSupabaseStore(
+    {
+      SUPABASE_URL: 'https://example.supabase.co',
+      SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+    },
+    {
+      createClientImpl: () => ({
+        from(table) {
+          return {
+            select() { return createQuery(table); },
+          };
+        },
+      }),
+    },
+  );
+
+  const state = await adapter.getState();
+  assert.deepEqual(state.relationshipMemberships, []);
+  assert.deepEqual(state.surpriseDelightSettings, []);
+  assert.deepEqual(await adapter.listRelationshipMemberships(), []);
+  assert.deepEqual(await adapter.listSurpriseDelightSettings(), []);
 });
 
 test('internal endpoints reject missing secret', async () => {
@@ -829,7 +1372,7 @@ test('charge endpoint: a declined card is logged as an issue, not silently dropp
 
 test('charge endpoint: missing payment method fails closed without calling Stripe', async () => {
   resetData();
-  // Seed's default consent-1 is active but has empty Stripe IDs — exactly the
+  // Seed's default consent-1 is active but has empty Stripe IDs, exactly the
   // "no real payment method on file" case.
   let stripeCalled = false;
   setStripeClient({ paymentIntents: { async create() { stripeCalled = true; return { id: 'pi_x', status: 'succeeded' }; } } });
@@ -1236,6 +1779,19 @@ test('production mode requires a real Stripe secret key', () => {
   assert.ok(result.errors.some((message) => /STRIPE_SECRET_KEY/.test(message)));
 });
 
+test('production mode rejects live Stripe keys', () => {
+  const result = validateProductionEnvironment({
+    NODE_ENV: 'production',
+    STORAGE_BACKEND: 'json',
+    AUTH_BACKEND: 'pilot',
+    INTERNAL_API_SECRET: 'secret',
+    ADMIN_EMAILS: 'admin@example.com',
+    STRIPE_SECRET_KEY: ['sk', 'live', 'fake'].join('_'),
+  });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((message) => /sk_test_/.test(message)));
+});
+
 test('cookies are marked secure in production', async () => {
   resetData();
   process.env.NODE_ENV = 'production';
@@ -1307,6 +1863,18 @@ test('committed docs and examples do not contain obvious real secrets', () => {
   assert.deepEqual(offenders, []);
 });
 
+test('Supabase schema includes hybrid offer tables with RLS policies', () => {
+  const schema = fs.readFileSync(path.join(__dirname, '..', 'supabase', 'schema.sql'), 'utf8');
+  assert.match(schema, /create table if not exists relationship_memberships/i);
+  assert.match(schema, /create table if not exists surprise_delight_settings/i);
+  assert.match(schema, /alter table relationship_memberships enable row level security/i);
+  assert.match(schema, /alter table surprise_delight_settings enable row level security/i);
+  assert.match(schema, /create policy relationship_memberships_owner_access/i);
+  assert.match(schema, /create policy surprise_delight_settings_owner_access/i);
+  assert.match(schema, /grant select, insert, update, delete on relationship_memberships to authenticated/i);
+  assert.match(schema, /order_source text not null default 'milestone'/i);
+});
+
 test('route handlers work correctly against a mock async storage adapter', async () => {
   resetData();
   const fakeStore = createFakeAsyncStore(TWO_CUSTOMER_SEED);
@@ -1328,6 +1896,23 @@ test('route handlers work correctly against a mock async storage adapter', async
   } finally {
     setStorageAdapter(null);
     resetAuthAdapter();
+  }
+});
+
+test('pilot auth resolves the current customer when storage is async', async () => {
+  resetData();
+  const fakeStore = createFakeAsyncStore(TWO_CUSTOMER_SEED);
+  setStorageAdapter(fakeStore);
+  resetAuthAdapter();
+  process.env.AUTH_BACKEND = 'pilot';
+  try {
+    const response = await request('/plans');
+    assert.equal(response.status, 200);
+    assert.match(response.text, /Relationship plans/);
+  } finally {
+    setStorageAdapter(null);
+    resetAuthAdapter();
+    resetData();
   }
 });
 

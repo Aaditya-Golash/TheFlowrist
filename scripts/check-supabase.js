@@ -27,6 +27,8 @@ async function main() {
     'florist_partners',
     'service_zones',
     'payment_consents',
+    'relationship_memberships',
+    'surprise_delight_settings',
     'order_event_logs',
     'feedback',
   ];
